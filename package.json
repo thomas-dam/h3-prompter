@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Standalone macOS Node.js/Express web app for editing MiniMax H3 prompts using local LM Studio or cloud OpenRouter, powered by Qwen models.",
   "type": "module",
-  "main": "src/server.js",
+  "main": "src/main.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
+    "start": "node src/main.js",
+    "dev": "node --watch src/main.js",
     "test": "node --test tests/*.test.js"
   },
   "engines": {

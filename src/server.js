@@ -52,6 +52,67 @@ const STATE = {
 const GENERATION_CACHE = new Map();
 let activeAbortController = null;
 
+async function providerStatus() {
+  const settings = loadSettings();
+  const lmstudioModel = settings.lmstudio_model_id?.trim() || "";
+  let lmstudio;
+
+  try {
+    const response = await fetch("http://127.0.0.1:1234/v1/models", {
+      signal: AbortSignal.timeout(1200),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    const models = Array.isArray(payload?.data)
+      ? payload.data.map((model) => model?.id).filter(Boolean)
+      : [];
+    const modelAvailable = !lmstudioModel || models.includes(lmstudioModel);
+    lmstudio = {
+      connected: true,
+      configured: !!lmstudioModel,
+      ready: !!lmstudioModel && modelAvailable,
+      model_available: modelAvailable,
+      models,
+      message: !lmstudioModel
+        ? "LM Studio is running. Enter a model ID that appears in its model list."
+        : modelAvailable
+          ? `LM Studio is connected and “${lmstudioModel}” is available.`
+          : `LM Studio is connected, but “${lmstudioModel}” is not available.`,
+    };
+  } catch {
+    lmstudio = {
+      connected: false,
+      configured: !!lmstudioModel,
+      ready: false,
+      model_available: false,
+      models: [],
+      message: "Start LM Studio’s local server on port 1234.",
+    };
+  }
+
+  const openrouterModel = settings.openrouter_model_id?.trim() || "";
+  const hasOpenRouterKey = !!getOpenRouterKey();
+  const openrouterConfigured = !!openrouterModel && hasOpenRouterKey;
+  return {
+    selected: settings.provider || "lmstudio",
+    providers: {
+      lmstudio,
+      openrouter: {
+        connected: null,
+        configured: openrouterConfigured,
+        ready: openrouterConfigured,
+        verified: false,
+        has_key: hasOpenRouterKey,
+        message: !hasOpenRouterKey
+          ? "Save an OpenRouter API key to continue."
+          : !openrouterModel
+            ? "Enter an OpenRouter model ID."
+            : "Configured. The cloud connection is checked when you generate.",
+      },
+    },
+  };
+}
+
 function errorResponse(code, message, status, details) {
   const payload = { error: { code, message } };
   if (details !== undefined) payload.error.details = details;
@@ -102,6 +163,10 @@ export function createServer() {
       backend_ready: true,
       version: "1.0.0",
     });
+  });
+
+  app.get(`${ROUTE_PREFIX}/provider-status`, async (req, res) => {
+    res.json(await providerStatus());
   });
 
   app.get(`${ROUTE_PREFIX}/guides`, (req, res) => {

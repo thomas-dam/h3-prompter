@@ -18,6 +18,13 @@ export const MODE_LIMITS = {
   L2VA: { image: 1 },
   Reference: REFERENCE_LIMITS,
 };
+export const MODE_REQUIREMENTS = {
+  T2VA: {},
+  I2VA: { image: 1 },
+  FL2VA: { image: 2 },
+  L2VA: { image: 1 },
+  Reference: { visual: 1 },
+};
 
 export class MediaError extends Error {
   constructor(code, message) {
@@ -169,21 +176,31 @@ export class MediaStore {
   manifest(sessionId, mode) {
     const assets = (this.sessions.get(sessionId) || []).filter((a) => a.mode === mode);
     const violations = [];
+    const counts = {
+      image: assets.filter((a) => a.type === "image").length,
+      video: assets.filter((a) => a.type === "video").length,
+      audio: assets.filter((a) => a.type === "audio").length,
+    };
+    const requirements = MODE_REQUIREMENTS[mode] || {};
+    if (requirements.image && counts.image < requirements.image) {
+      violations.push({
+        code: "REQUIRED_MEDIA_MISSING",
+        message: `${mode} requires ${requirements.image} image${requirements.image === 1 ? "" : "s"}.`,
+      });
+    }
     if (mode === "Reference") {
-      const types = new Set(assets.map((a) => a.type));
-      if (types.size === 1 && types.has("audio")) {
-        violations.push({ code: "AUDIO_REQUIRES_VISUAL_REFERENCE", message: "Reference audio must be accompanied by an image or video." });
+      if (counts.image + counts.video < requirements.visual) {
+        violations.push({
+          code: "REFERENCE_REQUIRES_VISUAL",
+          message: "Reference mode requires at least one image or video.",
+        });
       }
     }
     return {
       session_id: sessionId,
       mode,
       assets: assets.map((a) => this.public(a)),
-      counts: {
-        image: assets.filter((a) => a.type === "image").length,
-        video: assets.filter((a) => a.type === "video").length,
-        audio: assets.filter((a) => a.type === "audio").length,
-      },
+      counts,
       violations,
       valid: violations.length === 0,
     };

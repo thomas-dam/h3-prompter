@@ -56,16 +56,15 @@ Pick one (or switch between them anytime in the UI).
    your machine).
 3. Start the local server: in LM Studio, go to the **Developer** tab and
    click **Start Server**. It listens on `http://127.0.0.1:1234` by default.
-4. In H3 Prompt Writer's **Settings** panel, choose **Provider: LM Studio**
-   and type the model ID exactly as LM Studio shows it.
+4. Open **Model connection** in H3 Prompt Writer, choose **LM Studio**,
+   then choose a model from the list reported by LM Studio.
 
 No API key, no internet — everything stays on your machine.
 
 ### OpenRouter (cloud, paid)
 
 1. Create an account at <https://openrouter.ai/> and create an API key.
-2. In H3 Prompt Writer's **Settings** panel, choose
-   **Provider: OpenRouter**.
+2. Open **Model connection** in H3 Prompt Writer and choose **OpenRouter**.
 3. Paste your API key and click **Save**. The key is stored in the macOS
    Keychain — it never touches disk in plaintext.
 4. Type the Qwen model ID (e.g. `qwen/qwen3-235b-a22b-2507`). Check the
@@ -75,7 +74,7 @@ No API key, no internet — everything stays on your machine.
 
 ### The basic flow
 
-1. **Pick a mode** (top of the Creative Brief panel):
+1. Under **Choose the starting point**, pick a mode:
    - **T2VA** — text to video, no references
    - **I2VA** — one start image, video develops forward
    - **FL2VA** — first and last image, model fills the motion between
@@ -83,18 +82,20 @@ No API key, no internet — everything stays on your machine.
    - **Reference** — up to 9 images, 3 videos, 3 audio references; full
      six-section reference prompt
 
-2. **Set aspect ratio and duration** (1–20 seconds).
+2. Set the frame shape and duration (1–20 seconds).
 
-3. **Write a creative brief.** Plain English, up to 2,000 characters. Say
+3. Under **Describe the result**, write a creative brief. Plain English, up to 2,000 characters. Say
    what you want to see and hear. If you uploaded references, mention their
    roles here (e.g. "Use Video 1 only for motion").
 
-4. **Upload references** (if your mode takes them). Drag files into the
-   Media panel or click **Browse**. Images, videos, and audio are accepted
-   per the mode's limits. Videos are turned into ordered contact sheets
-   automatically — you'll see the preview in the panel.
+4. Add the references requested by the selected mode. The app shows the
+   exact requirement and keeps media from other modes out of the active view.
+   Images, videos, and audio are accepted per the mode's limits. Videos are
+   turned into ordered contact sheets automatically.
 
-5. **Click Generate.** The prompt streams in as the model writes. When it
+5. Under **Generate, review, and refine**, click **Generate H3 prompt**. The
+   button unlocks when the provider, brief, and required references are ready.
+   The prompt streams in as the model writes. When it
    finishes, the prompt audit runs automatically and tells you whether the
    output passes the official format checks.
 
@@ -109,7 +110,7 @@ current one plus the instruction.
 
 ### Advanced settings
 
-Click **Advanced** in the Settings panel to expose:
+Open **Advanced model options** inside Model connection to expose:
 
 - **Context** — Auto picks based on the model, or force 8K / 16K / 24K.
   Larger context lets you use more references and a longer brief.
@@ -174,9 +175,9 @@ Errors are structured with stable codes:
 npm test
 ```
 
-Unit tests cover request assembly (all five modes), validation limits,
-prompt audit decisions, and the narrow-repair message construction. There's
-no browser automation and no integration suite — those need a live model.
+Unit tests cover request assembly (all five modes), validation limits and
+required media, prompt audit decisions, and the narrow-repair message
+construction. Browser verification uses the running app and a live model.
 
 ## Troubleshooting
 

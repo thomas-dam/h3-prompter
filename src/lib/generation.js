@@ -41,6 +41,7 @@ export async function generate({
   sessionStore,
   signal,
   onDelta,
+  chatCompletion = streamChatCompletion,
 }) {
   const { url, headers, model } = providerUrlAndHeaders(provider, settings, modelId);
   const { messages, metrics } = buildChatMessages(assembled, sessionStore);
@@ -60,34 +61,54 @@ export async function generate({
 
   let response;
   try {
-    response = await streamChatCompletion({ url, headers, payload, signal, onDelta });
+    response = await chatCompletion({ url, headers, payload, signal, onDelta });
   } catch (error) {
     if (error.message.startsWith("GENERATION_CANCELLED")) throw error;
     if (error.message.startsWith("AUTH_FAILURE")) throw new ModelError("AUTH_FAILURE", error.message.slice("AUTH_FAILURE: ".length));
     if (error.message.startsWith("PROVIDER_UNAVAILABLE")) throw new ModelError("PROVIDER_UNAVAILABLE", error.message.slice("PROVIDER_UNAVAILABLE: ".length));
+    if (provider === "lmstudio" && error instanceof TypeError) {
+      throw new ModelError("PROVIDER_UNAVAILABLE", "LM Studio is not reachable. Start its local server on port 1234 and try again.");
+    }
     throw new ModelError("PROVIDER_ERROR", error.message.replace(/^[A-Z_]+: /, ""), { cause: error.cause });
   }
 
-  const text = response.choices[0].message.content || "";
+  const usableFinalText = (candidate) => {
+    const content = candidate.choices[0].message.content || "";
+    if (!content.trim()) return "";
+    try {
+      return finalText(content);
+    } catch (error) {
+      // Some Qwen/LM Studio combinations emit only an unfinished reasoning
+      // channel even when Thinking was disabled. Retry once with a plain
+      // completion instead of exposing a spurious empty-generation error.
+      if (error instanceof ModelError && error.code === "THINKING_TRUNCATED") return "";
+      throw error;
+    }
+  };
+
+  const text = usableFinalText(response);
   const usage = response.usage || {};
   const primaryFinishReason = response.choices[0].finish_reason;
   const thinkingAttemptTokens = thinking ? parseInt(usage.completion_tokens || 0, 10) : 0;
 
   let thinkingFallback = false;
   let finalResponse = response;
-  if (thinking && (!text.trim() || primaryFinishReason === "length")) {
+  if (!text.trim() || primaryFinishReason === "length") {
     thinkingFallback = true;
     const fallbackPayload = { ...payload, max_tokens: 1536, chat_template_kwargs: { enable_thinking: false } };
-    finalResponse = await streamChatCompletion({ url, headers, payload: fallbackPayload, signal, onDelta });
+    finalResponse = await chatCompletion({ url, headers, payload: fallbackPayload, signal, onDelta });
     const fallbackUsage = finalResponse.usage || {};
     usage.completion_tokens = thinkingAttemptTokens + parseInt(fallbackUsage.completion_tokens || 0, 10);
     usage.prompt_tokens = fallbackUsage.prompt_tokens || usage.prompt_tokens || 0;
   }
 
-  const finalRawText = (finalResponse.choices[0].message.content || "");
-  if (!finalRawText.trim()) throw new ModelError("EMPTY_GENERATION", "The model did not produce a final prompt.");
-
-  let prompt = finalText(finalRawText);
+  let prompt = usableFinalText(finalResponse);
+  if (!prompt.trim()) {
+    throw new ModelError(
+      "EMPTY_GENERATION",
+      "The model returned no final prompt after a retry with Thinking off. Try again or choose a different model.",
+    );
+  }
   const durationSeconds = assembled.input.duration_seconds;
   const intentText = assembled.input.creative_brief || [assembled.input.current_prompt, assembled.input.instruction].join("\n");
   const cameraStructureAllowed = cameraStructureRequested(intentText);
@@ -141,7 +162,7 @@ export async function generate({
     if (seed !== undefined && seed !== null) repairPayload.seed = seed;
     let repairResponse;
     try {
-      repairResponse = await streamChatCompletion({ url, headers, payload: repairPayload, signal });
+      repairResponse = await chatCompletion({ url, headers, payload: repairPayload, signal });
     } catch (error) {
       if (error.message.startsWith("GENERATION_CANCELLED")) throw error;
       formatRepairFailure = `repair request failed: ${error.message}`;

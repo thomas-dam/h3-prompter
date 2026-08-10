@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MODE_LIMITS, validateCapacity, MediaError, mediaType } from "../src/lib/media.js";
+import { MediaStore, validateCapacity, MediaError, mediaType } from "../src/lib/media.js";
 
 test("T2VA accepts no media types", () => {
   assert.throws(
@@ -61,4 +61,34 @@ test("L2VA accepts up to 1 image", () => {
     () => validateCapacity("L2VA", [{ mode: "L2VA", type: "image" }], "image"),
     (err) => err instanceof MediaError && err.code === "MEDIA_LIMIT_REACHED",
   );
+});
+
+test("image-guided modes require their complete image set", () => {
+  const store = new MediaStore();
+  const session = "00000000-0000-4000-8000-000000000001";
+
+  assert.equal(store.manifest(session, "I2VA").valid, false);
+  assert.equal(store.manifest(session, "FL2VA").valid, false);
+  assert.equal(store.manifest(session, "L2VA").valid, false);
+
+  store.assets(session).push({ id: "one", session_id: session, mode: "I2VA", type: "image", filename: "one.png" });
+  store.assets(session).push({ id: "first", session_id: session, mode: "FL2VA", type: "image", filename: "first.png" });
+  store.assets(session).push({ id: "last", session_id: session, mode: "FL2VA", type: "image", filename: "last.png" });
+  store.assets(session).push({ id: "end", session_id: session, mode: "L2VA", type: "image", filename: "end.png" });
+
+  assert.equal(store.manifest(session, "I2VA").valid, true);
+  assert.equal(store.manifest(session, "FL2VA").valid, true);
+  assert.equal(store.manifest(session, "L2VA").valid, true);
+});
+
+test("Reference mode requires a visual reference", () => {
+  const store = new MediaStore();
+  const session = "00000000-0000-4000-8000-000000000002";
+  store.assets(session).push({ id: "audio", session_id: session, mode: "Reference", type: "audio", filename: "sound.wav" });
+  const audioOnly = store.manifest(session, "Reference");
+  assert.equal(audioOnly.valid, false);
+  assert.equal(audioOnly.violations[0].code, "REFERENCE_REQUIRES_VISUAL");
+
+  store.assets(session).push({ id: "image", session_id: session, mode: "Reference", type: "image", filename: "look.png" });
+  assert.equal(store.manifest(session, "Reference").valid, true);
 });

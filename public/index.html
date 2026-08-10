@@ -3,125 +3,212 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Turn a simple creative brief into a structured MiniMax H3 video prompt." />
   <title>H3 Prompt Writer</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header>
-    <h1>H3 Prompt Writer</h1>
-    <div id="status-badge">idle</div>
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">MiniMax H3</p>
+      <h1>Prompt Writer</h1>
+      <p class="tagline">Shape a video idea into a production-ready H3 prompt.</p>
+    </div>
+    <div id="status-badge" role="status">Loading…</div>
   </header>
 
   <main>
-    <section id="settings-panel">
-      <h2>Settings</h2>
-      <div class="field-row">
-        <label for="provider">Provider</label>
-        <select id="provider">
-          <option value="lmstudio">LM Studio (local)</option>
-          <option value="openrouter">OpenRouter (cloud)</option>
-        </select>
-      </div>
-      <div class="field-row">
-        <label for="model-id">Model ID</label>
-        <input id="model-id" type="text" placeholder="e.g. qwen3-235b-a22b-2507" />
-      </div>
-      <div class="field-row" id="openrouter-key-row" hidden>
-        <label for="openrouter-key">OpenRouter API Key</label>
-        <div class="key-row">
-          <input id="openrouter-key" type="password" placeholder="sk-or-..." />
-          <button id="save-key">Save</button>
+    <details id="connection-panel" class="connection-panel">
+      <summary>
+        <span class="connection-title">Model connection</span>
+        <span id="connection-summary" class="connection-summary">Checking setup…</span>
+      </summary>
+      <div class="connection-body">
+        <div class="connection-grid">
+          <div class="field-group">
+            <label for="provider">Provider</label>
+            <select id="provider">
+              <option value="lmstudio">LM Studio · local</option>
+              <option value="openrouter">OpenRouter · cloud</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label for="lmstudio-model-id" id="lmstudio-model-label">Model</label>
+            <select id="lmstudio-model-id" aria-describedby="lmstudio-model-note">
+              <option value="">Checking LM Studio…</option>
+            </select>
+            <p id="lmstudio-model-note" class="field-note">Models currently reported by LM Studio.</p>
+            <label for="openrouter-model-id" id="openrouter-model-label" hidden>Model ID</label>
+            <input id="openrouter-model-id" type="text" placeholder="e.g. qwen/qwen3-vl-8b-instruct" autocomplete="off" hidden />
+          </div>
         </div>
-        <div id="key-status"></div>
+
+        <div class="provider-message" id="provider-message" role="status"></div>
+
+        <div class="field-group" id="openrouter-key-row" hidden>
+          <label for="openrouter-key">OpenRouter API key</label>
+          <div class="key-row">
+            <input id="openrouter-key" type="password" placeholder="sk-or-…" autocomplete="off" />
+            <button id="save-key" class="secondary-button" type="button">Save key</button>
+          </div>
+          <p id="key-status" class="field-note">Stored securely in macOS Keychain.</p>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>Advanced model options</summary>
+          <div class="advanced-grid">
+            <div class="field-group">
+              <label for="context-profile">Context</label>
+              <select id="context-profile">
+                <option value="auto">Auto</option>
+                <option value="8k">8K</option>
+                <option value="16k">16K</option>
+                <option value="24k">24K</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="kv-cache">KV cache</label>
+              <select id="kv-cache">
+                <option value="auto">Auto</option>
+                <option value="q8">Q8</option>
+                <option value="f16">F16</option>
+              </select>
+            </div>
+            <label class="check-field" for="thinking">
+              <input id="thinking" type="checkbox" />
+              <span>Use thinking mode</span>
+            </label>
+            <div class="field-group">
+              <label for="seed">Seed</label>
+              <input id="seed" type="number" min="0" placeholder="Random" />
+            </div>
+          </div>
+        </details>
       </div>
-      <details>
-        <summary>Advanced</summary>
-        <div class="field-row">
-          <label for="context-profile">Context</label>
-          <select id="context-profile">
-            <option value="auto">Auto</option>
-            <option value="8k">8K</option>
-            <option value="16k">16K</option>
-            <option value="24k">24K</option>
+    </details>
+
+    <section class="workflow-card" aria-labelledby="step-one-title">
+      <div class="step-heading">
+        <span class="step-number">1</span>
+        <div>
+          <p class="step-kicker">Choose the starting point</p>
+          <h2 id="step-one-title">How should H3 build the shot?</h2>
+        </div>
+      </div>
+
+      <input id="mode" type="hidden" value="T2VA" />
+      <div class="mode-grid" role="group" aria-label="H3 generation mode">
+        <button class="mode-card selected" type="button" data-mode="T2VA" aria-pressed="true">
+          <span class="mode-name">Text only</span>
+          <span class="mode-description">Create everything from your description.</span>
+        </button>
+        <button class="mode-card" type="button" data-mode="I2VA" aria-pressed="false">
+          <span class="mode-name">Start image</span>
+          <span class="mode-description">Begin with one image and animate forward.</span>
+        </button>
+        <button class="mode-card" type="button" data-mode="FL2VA" aria-pressed="false">
+          <span class="mode-name">First + last</span>
+          <span class="mode-description">Connect two images with a continuous path.</span>
+        </button>
+        <button class="mode-card" type="button" data-mode="L2VA" aria-pressed="false">
+          <span class="mode-name">End image</span>
+          <span class="mode-description">Build the action that leads to one final image.</span>
+        </button>
+        <button class="mode-card" type="button" data-mode="Reference" aria-pressed="false">
+          <span class="mode-name">Reference mix</span>
+          <span class="mode-description">Guide the result with images, video, or audio.</span>
+        </button>
+      </div>
+
+      <div class="shot-settings">
+        <div class="field-group">
+          <label for="aspect-ratio">Frame</label>
+          <select id="aspect-ratio">
+            <option>16:9</option>
+            <option>9:16</option>
+            <option>1:1</option>
+            <option>2:3</option>
+            <option>3:2</option>
+            <option>3:4</option>
+            <option>4:3</option>
+            <option>21:9</option>
           </select>
         </div>
-        <div class="field-row">
-          <label for="kv-cache">KV Cache</label>
-          <select id="kv-cache">
-            <option value="auto">Auto</option>
-            <option value="q8">Q8</option>
-            <option value="f16">F16</option>
-          </select>
+        <div class="field-group duration-field">
+          <label for="duration">Length</label>
+          <div class="input-suffix">
+            <input id="duration" type="number" min="1" max="20" step="1" value="6" />
+            <span>seconds</span>
+          </div>
         </div>
-        <div class="field-row">
-          <label for="thinking">Thinking</label>
-          <input id="thinking" type="checkbox" />
-        </div>
-        <div class="field-row">
-          <label for="seed">Seed</label>
-          <input id="seed" type="number" min="0" placeholder="random" />
-        </div>
-      </details>
+      </div>
     </section>
 
-    <section id="brief-panel">
-      <h2>Creative Brief</h2>
-      <div class="field-row">
-        <label for="mode">Mode</label>
-        <select id="mode">
-          <option value="T2VA">T2VA (text to video)</option>
-          <option value="I2VA">I2VA (image to video)</option>
-          <option value="FL2VA">FL2VA (first+last frame)</option>
-          <option value="L2VA">L2VA (last frame)</option>
-          <option value="Reference">Reference (full)</option>
-        </select>
+    <section class="workflow-card" aria-labelledby="step-two-title">
+      <div class="step-heading">
+        <span class="step-number">2</span>
+        <div>
+          <p class="step-kicker">Describe the result</p>
+          <h2 id="step-two-title">What should happen in the video?</h2>
+        </div>
       </div>
-      <div class="field-row">
-        <label for="aspect-ratio">Aspect Ratio</label>
-        <select id="aspect-ratio">
-          <option>16:9</option>
-          <option>9:16</option>
-          <option>1:1</option>
-          <option>2:3</option>
-          <option>3:2</option>
-          <option>3:4</option>
-          <option>4:3</option>
-          <option>21:9</option>
-        </select>
+
+      <label class="sr-only" for="creative-brief">Creative brief</label>
+      <textarea id="creative-brief" rows="8" maxlength="2000" placeholder="Example: A lone cyclist crosses a rain-soaked bridge at blue hour. The camera tracks beside her in one continuous shot while city lights stretch across the wet road…"></textarea>
+      <div class="brief-meta">
+        <p>Include the subject, action, setting, camera movement, mood, and sound that matter.</p>
+        <span id="brief-count">0 / 2,000</span>
       </div>
-      <div class="field-row">
-        <label for="duration">Duration (s)</label>
-        <input id="duration" type="number" min="1" max="20" step="1" value="6" />
+
+      <div id="media-panel" class="media-panel" hidden>
+        <div class="media-heading">
+          <div>
+            <h3 id="media-title">Add references</h3>
+            <p id="media-guidance"></p>
+          </div>
+          <span id="media-count" class="media-count"></span>
+        </div>
+        <div id="media-drop" tabindex="0" role="button" aria-label="Add reference files">
+          <span class="upload-icon" aria-hidden="true">↑</span>
+          <p><strong>Drop files here</strong> or <button id="media-browse" class="link-button" type="button">choose files</button></p>
+          <p id="media-types" class="field-note"></p>
+          <input id="media-input" type="file" multiple hidden />
+        </div>
+        <div id="media-list" aria-live="polite"></div>
       </div>
-      <textarea id="creative-brief" rows="8" placeholder="Describe the video you want..."></textarea>
     </section>
 
-    <section id="media-panel">
-      <h2>Media References</h2>
-      <div id="media-drop">
-        <p>Drag files here or <button id="media-browse">Browse</button></p>
-        <input id="media-input" type="file" multiple hidden />
+    <section class="workflow-card result-card" aria-labelledby="step-three-title">
+      <div class="step-heading">
+        <span class="step-number">3</span>
+        <div>
+          <p class="step-kicker">Write the prompt</p>
+          <h2 id="step-three-title">Generate, review, and refine</h2>
+        </div>
       </div>
-      <div id="media-list"></div>
-    </section>
 
-    <section id="output-panel">
-      <h2>Generated Prompt</h2>
+      <div id="readiness" class="readiness" role="status"></div>
       <div id="action-row">
-        <button id="generate-btn">Generate</button>
-        <button id="cancel-btn" disabled>Cancel</button>
-        <button id="copy-btn">Copy</button>
+        <button id="generate-btn" class="primary-button" type="button">Generate H3 prompt</button>
+        <button id="cancel-btn" class="secondary-button danger-button" type="button" disabled>Cancel</button>
       </div>
-      <textarea id="output" rows="16" placeholder="Generated H3 prompt will appear here..."></textarea>
+      <div id="progress" role="status"></div>
+
+      <div class="output-heading">
+        <label for="output">Generated prompt</label>
+        <button id="copy-btn" class="secondary-button compact-button" type="button" disabled>Copy</button>
+      </div>
+      <textarea id="output" rows="16" placeholder="Your generated H3 prompt will appear here." spellcheck="false"></textarea>
       <div id="audit-display"></div>
       <div id="refine-row" hidden>
-        <input id="refine-instruction" type="text" placeholder="Revision instruction..." />
-        <button id="refine-btn">Refine</button>
+        <label class="sr-only" for="refine-instruction">Revision instruction</label>
+        <input id="refine-instruction" type="text" placeholder="Ask for one change, such as “make the opening brighter”" />
+        <button id="refine-btn" class="secondary-button" type="button">Refine prompt</button>
       </div>
-      <div id="progress"></div>
     </section>
   </main>
 
+  <footer>Built around the official MiniMax H3 prompt-writing guides.</footer>
   <script type="module" src="app.js"></script>
 </body>
 </html>
