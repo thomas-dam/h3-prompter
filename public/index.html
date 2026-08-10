@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>H3 Prompt Writer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>H3 Prompt Writer</h1>
+    <div id="status-badge">idle</div>
+  </header>
+
+  <main>
+    <section id="settings-panel">
+      <h2>Settings</h2>
+      <div class="field-row">
+        <label for="provider">Provider</label>
+        <select id="provider">
+          <option value="lmstudio">LM Studio (local)</option>
+          <option value="openrouter">OpenRouter (cloud)</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label for="model-id">Model ID</label>
+        <input id="model-id" type="text" placeholder="e.g. qwen3-235b-a22b-2507" />
+      </div>
+      <div class="field-row" id="openrouter-key-row" hidden>
+        <label for="openrouter-key">OpenRouter API Key</label>
+        <div class="key-row">
+          <input id="openrouter-key" type="password" placeholder="sk-or-..." />
+          <button id="save-key">Save</button>
+        </div>
+        <div id="key-status"></div>
+      </div>
+      <details>
+        <summary>Advanced</summary>
+        <div class="field-row">
+          <label for="context-profile">Context</label>
+          <select id="context-profile">
+            <option value="auto">Auto</option>
+            <option value="8k">8K</option>
+            <option value="16k">16K</option>
+            <option value="24k">24K</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label for="kv-cache">KV Cache</label>
+          <select id="kv-cache">
+            <option value="auto">Auto</option>
+            <option value="q8">Q8</option>
+            <option value="f16">F16</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label for="thinking">Thinking</label>
+          <input id="thinking" type="checkbox" />
+        </div>
+        <div class="field-row">
+          <label for="seed">Seed</label>
+          <input id="seed" type="number" min="0" placeholder="random" />
+        </div>
+      </details>
+    </section>
+
+    <section id="brief-panel">
+      <h2>Creative Brief</h2>
+      <div class="field-row">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="T2VA">T2VA (text to video)</option>
+          <option value="I2VA">I2VA (image to video)</option>
+          <option value="FL2VA">FL2VA (first+last frame)</option>
+          <option value="L2VA">L2VA (last frame)</option>
+          <option value="Reference">Reference (full)</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label for="aspect-ratio">Aspect Ratio</label>
+        <select id="aspect-ratio">
+          <option>16:9</option>
+          <option>9:16</option>
+          <option>1:1</option>
+          <option>2:3</option>
+          <option>3:2</option>
+          <option>3:4</option>
+          <option>4:3</option>
+          <option>21:9</option>
+        </select>
+      </div>
+      <div class="field-row">
+        <label for="duration">Duration (s)</label>
+        <input id="duration" type="number" min="1" max="20" step="1" value="6" />
+      </div>
+      <textarea id="creative-brief" rows="8" placeholder="Describe the video you want..."></textarea>
+    </section>
+
+    <section id="media-panel">
+      <h2>Media References</h2>
+      <div id="media-drop">
+        <p>Drag files here or <button id="media-browse">Browse</button></p>
+        <input id="media-input" type="file" multiple hidden />
+      </div>
+      <div id="media-list"></div>
+    </section>
+
+    <section id="output-panel">
+      <h2>Generated Prompt</h2>
+      <div id="action-row">
+        <button id="generate-btn">Generate</button>
+        <button id="cancel-btn" disabled>Cancel</button>
+        <button id="copy-btn">Copy</button>
+      </div>
+      <textarea id="output" rows="16" placeholder="Generated H3 prompt will appear here..."></textarea>
+      <div id="audit-display"></div>
+      <div id="refine-row" hidden>
+        <input id="refine-instruction" type="text" placeholder="Revision instruction..." />
+        <button id="refine-btn">Refine</button>
+      </div>
+      <div id="progress"></div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

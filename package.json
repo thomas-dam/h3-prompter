@@ -1,0 +1,20 @@
+{
+  "name": "h3-promptwriter",
+  "version": "1.0.0",
+  "description": "Standalone macOS Node.js/Express web app for editing MiniMax H3 prompts using local LM Studio or cloud OpenRouter, powered by Qwen models.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "sharp": "^0.33.5"
+  }
+}
