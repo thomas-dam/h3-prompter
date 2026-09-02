@@ -86,6 +86,23 @@ export function auditPrompt(prompt, mode = "Reference", durationSeconds = null, 
   const detailedForCount = detailed.replace(/\[Shot\s+\d+\]/gi, "");
   const detailedWords = (detailedForCount.match(/[A-Za-z]+(?:[-'][A-Za-z]+)*/g) || []).length;
   const hasShotMarker = /^\s*\[Shot\s+1\]/im.test(detailed);
+  const shotTimingViolations = [];
+  let priorCut = 0;
+  let expectedShot = 1;
+  for (const match of detailed.matchAll(/\[Shot\s+(\d+)\](?:\s+At\s+(\d{2}:\d{2}\.\d{3}))?/gi)) {
+    const number = Number(match[1]);
+    if (number !== expectedShot++) shotTimingViolations.push("Shot numbers must be sequential without duplicates.");
+    if (number === 1 && match[2]) shotTimingViolations.push("Shot 1 must not start with a timestamp.");
+    if (number > 1) {
+      if (!match[2]) shotTimingViolations.push(`Shot ${number} needs an At MM:SS.mmm cut time.`);
+      else {
+        const [minutes, seconds] = match[2].split(":").map(Number);
+        const time = minutes * 60 + seconds;
+        if (time <= priorCut || (durationSeconds !== null && time >= durationSeconds)) shotTimingViolations.push("Cut times must increase and fall before the clip ends.");
+        priorCut = time;
+      }
+    }
+  }
 
   const summaryMatch = positions["summary"];
   let taskLabel = null;
@@ -132,7 +149,8 @@ export function auditPrompt(prompt, mode = "Reference", durationSeconds = null, 
     internalVideoTerms.length > 0 ||
     missingDialogueSource ||
     missingTaskLabel ||
-    missingShotMarker;
+    missingShotMarker ||
+    shotTimingViolations.length > 0;
 
   return {
     mode,
@@ -142,6 +160,7 @@ export function auditPrompt(prompt, mode = "Reference", durationSeconds = null, 
     task_label: taskLabel,
     missing_task_label: missingTaskLabel,
     missing_shot_marker: missingShotMarker,
+    shot_timing_violations: shotTimingViolations,
     detailed_description_words: detailedWords,
     generation_word_target_applies: generationWordTarget,
     generation_word_target_met: wordTargetMet,
@@ -159,7 +178,8 @@ export function auditPrompt(prompt, mode = "Reference", durationSeconds = null, 
       internalVideoTerms.length === 0 &&
       !missingDialogueSource &&
       !missingTaskLabel &&
-      !missingShotMarker,
+      !missingShotMarker &&
+      shotTimingViolations.length === 0,
     quality_target_pass: qualityWarnings.length === 0,
     reference_understanding: "manual_review_required",
   };

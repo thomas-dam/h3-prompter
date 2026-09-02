@@ -1,4 +1,4 @@
-const CAMERA_MOVEMENT = /\b(?:zoom(?:s|ed|ing)?|pan(?:s|ned|ning)?|doll(?:y|ies|ied|ying)|tracking shot|camera\s+(?:moves?|pulls?|pushes?|pans?|zooms?|tracks?|dollies?))\b/gi;
+const CAMERA_MOVEMENT = /\b(?:zoom(?:s|ed|ing)?|pan(?:s|ned|ning)?|doll(?:y|ies|ied|ying)|tracking shot|camera\s+(?:moves?|pulls?|pushes?|pans?|zooms?|tracks?|dollies?))\b/i;
 
 export function referenceTags(text) {
   const tags = new Set();
@@ -57,6 +57,7 @@ export function auditFailures(audit) {
   if (audit.missing_task_label) failures.push("missing summary task label");
   if (audit.missing_shot_marker) failures.push("missing [Shot 1] marker");
   if (audit.invalid_timestamps?.length) failures.push("invalid target timestamps");
+  failures.push(...(audit.shot_timing_violations || []));
   if (audit.internal_video_representation_terms?.length) failures.push("internal contact-sheet language");
   if (audit.missing_dialogue_source) failures.push("dialogue without a stable speaker ID");
   if (audit.missing_reference_tags?.length) failures.push("missing reference tags: " + audit.missing_reference_tags.join(", "));

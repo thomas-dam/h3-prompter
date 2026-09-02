@@ -12,6 +12,10 @@ export const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 export const REFERENCE_LIMITS = { image: 9, video: 3, audio: 3, total: 12 };
 export const REFERENCE_DURATION_TOLERANCE_SECONDS = 15.1;
 export const MODE_LIMITS = {
+  Storyboard: { image: 64 },
+  VideoSource: { video: 1 },
+  Video: { image: 9, video: 1 },
+  Krea: { image: 6 },
   T2VA: {},
   I2VA: { image: 1 },
   FL2VA: { image: 2 },
@@ -65,7 +69,7 @@ export function validateCapacity(mode, assets, kind) {
 }
 
 function validateReferenceDurations(assets, incoming) {
-  if (incoming.mode !== "Reference" || (incoming.type !== "video" && incoming.type !== "audio")) return;
+  if (!["Reference", "Video"].includes(incoming.mode) || (incoming.type !== "video" && incoming.type !== "audio")) return;
   const duration = incoming.duration;
   if (duration === undefined || duration === null || duration < 2 || duration > REFERENCE_DURATION_TOLERANCE_SECONDS) {
     throw new MediaError("UNSUPPORTED_DURATION", "Reference video and audio clips must be 2–15 seconds long.");
@@ -131,7 +135,11 @@ export class MediaStore {
     };
     try {
       if (kind === "image") Object.assign(base, await processImage(storedPath, storedPath.split("/").slice(0, -1).join("/") + "/"));
-      else if (kind === "video") Object.assign(base, await processVideo(storedPath, storedPath.split("/").slice(0, -1).join("/") + "/"));
+      else if (kind === "video") {
+        Object.assign(base, mode === "VideoSource" ? await avMetadata(storedPath) : await processVideo(storedPath, storedPath.split("/").slice(0, -1).join("/") + "/"));
+        if (!base.width || !base.duration) throw new MediaError("MEDIA_DECODE_FAILED", "A readable video stream is required.");
+        if (mode === "VideoSource" && base.duration < 2) throw new MediaError("UNSUPPORTED_DURATION", "The source video must be at least 2 seconds long.");
+      }
       else Object.assign(base, await processAudio(storedPath));
       validateReferenceDurations(assets, base);
     } catch (error) {
@@ -160,7 +168,7 @@ export class MediaStore {
   async reorder(sessionId, mode, orderedIds) {
     const assets = this.assets(sessionId);
     const modeAssets = assets.filter((a) => a.mode === mode);
-    if (orderedIds.length !== modeAssets.length || new Set(orderedIds).size !== modeAssets.size) {
+    if (orderedIds.length !== modeAssets.length || new Set(orderedIds).size !== modeAssets.length || orderedIds.some((id) => !modeAssets.some((a) => a.id === id))) {
       throw new MediaError("INVALID_MEDIA_ORDER", "The media order does not match the active mode assets.");
     }
     const byId = new Map(modeAssets.map((a) => [a.id, a]));
@@ -210,7 +218,7 @@ export class MediaStore {
     const perType = { image: 0, video: 0, audio: 0 };
     for (const asset of assets.filter((a) => a.mode === mode)) {
       perType[asset.type]++;
-      if (mode === "Reference") {
+      if (mode === "Reference" || mode === "Video" || mode === "Krea") {
         const names = { image: "Picture", video: "Video", audio: "Audio" };
         asset.reference = `<${names[asset.type]} ${perType[asset.type]}>`;
       } else if (mode === "FL2VA") {
@@ -237,7 +245,7 @@ function guessMime(filename) {
   return map[ext] || "application/octet-stream";
 }
 
-export const CACHE_ROOT = join(tmpdir(), "h3-promptwriter");
+export const CACHE_ROOT = process.env.H3_CACHE_ROOT || join(tmpdir(), "h3-promptwriter");
 
 export const STORE = new MediaStore();
 
@@ -256,7 +264,7 @@ export async function processImage(source, targetDir) {
   };
 }
 
-function ffprobeJson(source) {
+export function ffprobeJson(source) {
   return new Promise((resolve, reject) => {
     execFile("ffprobe", ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", source], (err, stdout) => {
       if (err) return reject(err);
@@ -265,7 +273,7 @@ function ffprobeJson(source) {
   });
 }
 
-async function avMetadata(source) {
+export async function avMetadata(source) {
   const info = await ffprobeJson(source);
   const video = (info.streams || []).find((s) => s.codec_type === "video");
   const audio = (info.streams || []).find((s) => s.codec_type === "audio");
@@ -278,6 +286,9 @@ async function avMetadata(source) {
     has_audio: !!audio,
     sample_rate: audio ? parseInt(audio.sample_rate, 10) : null,
     channels: audio ? parseInt(audio.channels, 10) : null,
+    codec: video?.codec_name || null,
+    frame_rate: video?.avg_frame_rate || null,
+    color_space: video?.color_space || null,
   };
 }
 
@@ -337,7 +348,7 @@ export async function processVideo(source, targetDir, { frameCountMode = "auto",
   return metadata;
 }
 
-async function buildContactSheet(frames, target) {
+export async function buildContactSheet(frames, target) {
   const columns = frames.length <= 6 ? 3 : 4;
   const rows = Math.ceil(frames.length / columns);
   const cellWidth = 384;

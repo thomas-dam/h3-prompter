@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { motionReferenceRoles, motionBindingViolations } from '../src/lib/reference_roles.js';
+import { motionPrompt } from './fixtures/motion-reference.js';
 import {
   referenceTags,
   unexpectedAudioTask,
@@ -30,10 +32,27 @@ test("motion-only provenance check is narrow", () => {
   assert.deepEqual(explicitConstraintViolations(brief, good), []);
 });
 
+test('motion binding requires a source in the action section and does not assign unrelated video roles', () => {
+  const assets = [{ type: 'video', reference: '<Video 1>' }, { type: 'video', reference: '<Video 2>' }];
+  assert.deepEqual(motionReferenceRoles('Use <Video 1> for motion and <Video 2> for the background.', assets), []);
+  assert.deepEqual(motionReferenceRoles('Do not copy motion from <Video 1>.', assets), []);
+  assert.deepEqual(motionReferenceRoles('Use <Video 1> for the background.', assets), []);
+  const roles = motionReferenceRoles('Use <Video 2> for motion.', assets);
+  assert.deepEqual(roles, [{ reference: '<Video 2>', role: 'motion' }]);
+  assert.deepEqual(motionBindingViolations(motionPrompt.replaceAll('<Video 1>', '<Video 2>'), roles), []);
+  assert.equal(motionBindingViolations(motionPrompt, roles).length, 1);
+  assert.equal(motionBindingViolations(motionPrompt.replace('Have her follow', 'Do not follow').replaceAll('<Video 1>', '<Video 2>'), roles).length, 1);
+  const subjectBound = 'subject_definitions:\n<Subject 1> is the performer from <Picture 1>.\n<Subject 2> is the complete motion sequence sourced from <Video 2>.\nsummary:\n[reference generation]\ndetailed_description:\n[Shot 1] <Subject 1> performs <Subject 2> exactly, preserving its timing and sequence.\noverall_soundscape:\nN/A';
+  assert.deepEqual(motionBindingViolations(subjectBound, roles), []);
+});
+
 test("explicit no-cuts is enforced but unspecified camera is not", () => {
   const prompt = "[Shot 1] A tracking shot. [Shot 2] Cut to a close-up.";
   assert.ok(explicitConstraintViolations("Use one continuous shot with no cuts.", prompt).length > 0);
   assert.deepEqual(explicitConstraintViolations("Make it cinematic.", prompt), []);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.equal(explicitConstraintViolations('Static camera.', 'The camera pushes forward.').length, 1);
+  }
 });
 
 test("narrow repair receives original request and exact violations", () => {

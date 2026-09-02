@@ -1,233 +1,163 @@
-# H3 Prompt Writer
+# H3 + Krea Prompt Studio
 
-Standalone macOS web app for writing MiniMax H3 video prompts with local or
-cloud Qwen models. No ComfyUI, no GPU bindings, no Python — just Node.js,
-`ffmpeg`, and a Qwen model running locally or in the cloud.
+A local macOS web app combining H3 prompt writing, video analysis/trimming, and Krea 2 image prompts. It keeps the visual style of the local `h3-prompt-tool` and uses this project's Node backend.
 
-## What it does
+**It prepares prompts and reference clips. It never sends work to H3 or ComfyUI, uploads to their servers, or queues generation.**
 
-You give it a creative brief, optional image/video/audio references, and
-mode + aspect ratio + duration. It uses the official MiniMax H3 prompt-writing
-guides and a Qwen model to produce a structured H3 prompt you can paste into
-your H3 workflow.
+## Start
 
-Supports all five H3 modes: **T2VA**, **I2VA**, **FL2VA**, **L2VA**, and
-**Reference**.
-
-## Prerequisites
-
-Install these before you start:
-
-| Requirement | Why | Install |
-|-------------|-----|---------|
-| **Node.js 22+** | Runs the app | `brew install node` or download from nodejs.org |
-| **ffmpeg** (includes `ffprobe`) | Video frame extraction and contact sheets | `brew install ffmpeg` |
-| **A Qwen model** | The model that writes prompts | See provider setup below |
-
-Verify your environment:
+Requires Node.js 22+, FFmpeg/FFprobe on PATH, and an LM Studio or OpenRouter model. Image and video analysis require a model that accepts image inputs.
 
 ```sh
-node --version   # v22 or higher
-ffmpeg -version  # any recent version
-```
-
-That's the whole checklist. There's no GPU, CUDA, or Python stack to set up —
-the model runs in LM Studio or OpenRouter, not in this app.
-
-## Quick start
-
-```sh
-git clone git@github.com:thomas-dam/h3-prompter.git
-cd h3-prompter
 npm install
 npm start
 ```
 
-Open <http://127.0.0.1:4567> in your browser. You're ready to write prompts.
+Open **http://127.0.0.1:4567**. The server binds to loopback by default. `PORT` changes the port; `HOST` deliberately changes the bind address. Do not expose it to an untrusted network: this personal application has no account/authentication system.
 
-## Provider setup
+### LAN and Tailscale access on m1
 
-Pick one (or switch between them anytime in the UI).
+- **LAN:** http://192.168.1.178:4567 (the address may change with DHCP).
+- **Tailscale HTTPS:** https://m1.typhon-kelvin.ts.net:4567 — requires access to this machine through your tailnet.
 
-### LM Studio (local, free)
+The app listens on all IPv4 interfaces using `npm run start:lan`. Tailscale Serve proxies HTTPS port 4567 to `http://127.0.0.1:4567`; other Tailscale sites are unchanged. This uses **Serve, not Funnel**, with no public-internet route configured.
 
-1. Download and open [LM Studio](https://lmstudio.ai/).
-2. Download a Qwen model (e.g. `qwen3-235b-a22b-2507` — pick one that fits
-   your machine).
-3. Start the local server: in LM Studio, go to the **Developer** tab and
-   click **Start Server**. It listens on `http://127.0.0.1:1234` by default.
-4. Open **Model connection** in H3 Prompt Writer, choose **LM Studio**,
-   then choose a model from the list reported by LM Studio.
+The running app uses the tmux session `h3-promptwriter` and logs to `.cache/lan-server.log`. It survives terminal closure, but **does not auto-start after a Mac reboot**. From this project directory, start it again with:
 
-No API key, no internet — everything stays on your machine.
-
-### OpenRouter (cloud, paid)
-
-1. Create an account at <https://openrouter.ai/> and create an API key.
-2. Open **Model connection** in H3 Prompt Writer and choose **OpenRouter**.
-3. Paste your API key and click **Save**. The key is stored in the macOS
-   Keychain — it never touches disk in plaintext.
-4. Type the Qwen model ID (e.g. `qwen/qwen3-235b-a22b-2507`). Check the
-   exact ID on <https://openrouter.ai/models>.
-
-## Using the app
-
-### The basic flow
-
-1. Under **Choose the starting point**, pick a mode:
-   - **T2VA** — text to video, no references
-   - **I2VA** — one start image, video develops forward
-   - **FL2VA** — first and last image, model fills the motion between
-   - **L2VA** — one last image, model imagines what leads up to it
-   - **Reference** — up to 9 images, 3 videos, 3 audio references; full
-     six-section reference prompt
-
-2. Set the frame shape and duration (1–20 seconds).
-
-3. Under **Describe the result**, write a creative brief. Plain English, up to 2,000 characters. Say
-   what you want to see and hear. If you uploaded references, mention their
-   roles here (e.g. "Use Video 1 only for motion").
-
-4. Add the references requested by the selected mode. The app shows the
-   exact requirement and keeps media from other modes out of the active view.
-   Images, videos, and audio are accepted per the mode's limits. Videos are
-   turned into ordered contact sheets automatically.
-
-5. Under **Generate, review, and refine**, click **Generate H3 prompt**. The
-   button unlocks when the provider, brief, and required references are ready.
-   The prompt streams in as the model writes. When it
-   finishes, the prompt audit runs automatically and tells you whether the
-   output passes the official format checks.
-
-6. **Copy** the result into your H3 workflow.
-
-### Refining
-
-After a prompt is generated, the **Refine** row appears. Type a revision
-instruction (e.g. "make the opening brighter", "add a second shot at 3
-seconds") and click **Refine**. The model rewrites the prompt using your
-current one plus the instruction.
-
-### Advanced settings
-
-Open **Advanced model options** inside Model connection to expose:
-
-- **Context** — Auto picks based on the model, or force 8K / 16K / 24K.
-  Larger context lets you use more references and a longer brief.
-- **KV cache** — Auto, Q8, or F16. Affects LM Studio's memory use; leave on
-  Auto unless you know why you're changing it.
-- **Thinking** — enables Qwen's thinking mode. Uses more tokens and time
-  but often produces better prompts. Not available at 8K context.
-- **Seed** — set a number for reproducible runs, or leave blank for random.
-
-### The prompt audit
-
-For Reference mode, the app checks the generated prompt against the
-official MiniMax format rules after every generation:
-
-- All six required sections present and in order
-- `[Shot 1]` marker and summary task label present
-- Valid timestamps (MM:SS.mmm, within duration)
-- No leaked internal language ("contact sheet", "sampled frames")
-- Dialogue has stable speaker IDs
-- Reference tags match what you uploaded
-
-If the audit finds problems, it tries one **narrow repair** pass — a
-targeted correction that fixes only the listed violations without rewriting
-the rest. If the repair would change the dialogue or reference inventory,
-it's rejected and the original draft stays. The audit result is shown in
-the UI after generation.
-
-## API
-
-All endpoints live under `/h3studio`. The most useful ones:
-
-| Method | Route | Purpose |
-|--------|-------|---------|
-| `GET` | `/h3studio/status` | App state |
-| `GET` | `/h3studio/guides` | List vendored MiniMax guides |
-| `GET` | `/h3studio/guides/:mode` | Guide for a mode |
-| `GET` | `/h3studio/system-prompt/:mode` | Default system prompt for a mode |
-| `POST` | `/h3studio/assemble` | Preview the assembled request |
-| `POST` | `/h3studio/generate` | Generate a prompt (SSE stream) |
-| `POST` | `/h3studio/cancel` | Cancel the active generation |
-| `POST` | `/h3studio/refine` | Refine an existing prompt (SSE stream) |
-| `POST` | `/h3studio/media/upload` | Upload reference files (multipart) |
-| `GET` | `/h3studio/media` | List session media |
-| `GET` | `/h3studio/media/manifest` | Validated manifest for a mode |
-| `GET` | `/h3studio/media/:id/content` | Serve original / preview / sheet / frame |
-| `DELETE` | `/h3studio/media/:id` | Remove an asset |
-| `DELETE` | `/h3studio/media` | Clear a session |
-| `POST` | `/h3studio/media/reorder` | Reorder assets |
-| `GET/PUT` | `/h3studio/settings` | Read / update non-secret prefs |
-| `POST` | `/h3studio/settings/openrouter-key` | Store key in Keychain |
-| `DELETE` | `/h3studio/settings/openrouter-key` | Delete key from Keychain |
-
-Errors are structured with stable codes:
-
-```json
-{ "error": { "code": "INVALID_DURATION", "message": "Duration must be between 1 and 20 seconds." } }
+```sh
+mkdir -p .cache
+tmux new-session -d -s h3-promptwriter -c "$PWD" 'npm run start:lan >> .cache/lan-server.log 2>&1'
+tailscale serve --bg --https=4567 http://127.0.0.1:4567
 ```
 
-## Running the tests
+Stop the app with `tmux kill-session -t h3-promptwriter`. Remove only its HTTPS route with `tailscale serve --https=4567 off` (do not reset all Serve routes).
+
+Use trusted LAN/tailnet devices only: there is no login, and projects, model settings and model usage are shared. HTTP LAN access is unencrypted; prefer the Tailscale HTTPS link for entering API keys. Prompt copying falls back to browser copy support on HTTP; if blocked, the app selects the text and gives manual-copy instructions. Save projects before restarting the server; temporary unsaved media is cleared at startup.
+
+### Shared model settings
+
+Open **Model settings** and choose LM Studio or OpenRouter.
+
+- **LM Studio:** enter its base URL including `/v1`, for example `http://127.0.0.1:1234/v1` or your LAN server's address. Save, then use **Refresh models / connection**. Choose from **Available LM Studio models** or type a model ID manually; save settings to keep the choice. The dropdown lists every ID reported by the server, without filtering by the current selection. Existing settings are preserved; no LAN address is silently substituted.
+- **OpenRouter:** enter the model ID and save the API key. Keys remain in macOS Keychain. Cloud requests send the brief and prepared visual inputs to the selected provider. There is no automatic cloud fallback.
+- H3 context, KV cache, thinking and seed controls remain available. Video analysis uses bounded batches with thinking off. Availability in the model list does not prove image support; unsupported image requests fail with an actionable model error.
+
+## Storyboard: story to connected H3 clips
+
+**Story → storyboard prompts → generate/import images → Human Control → coordinated H3 clip prompts → manual ComfyUI generation.**
+
+Open **Storyboard** in the top navigation. It uses the same selected model and provider as the other pages. There is no Claude Code integration or dependency, and no automatic fallback from LM Studio to OpenRouter. Text planning can use a text model; H3 prompting with the uploaded references needs a vision-capable model.
+
+1. **Develop your story.** Enter an idea or paste a script, choose 1–8 draft clips and a frame shape, then develop the draft. Review/edit the story, shared scene and characters. You can also enter a plan manually, with up to 12 clips.
+2. **Plan clips and angles.** Edit each clip's camera, action, dialogue, duration, start/end state and connection to its predecessor. Clip duration is 2–15 seconds. Reorder cards as needed; check the new connections afterward. A cut to another angle should preserve scene/action continuity, not require identical framing.
+3. **Write image prompts.** Use the reviewed story to generate one still-image prompt per clip, plus a combined storyboard-sheet prompt. Copy or download them, generate the images in your chosen image tool, and import the results. The app does not generate or submit images itself.
+4. **Import and review references.** Choose character sheets, individual character views, full storyboard sheets or single panels. Use **Select panel / crop** to drag a region, enter percentages or select a grid cell. Crops become separate downloadable PNGs; originals are untouched. The library holds up to 64 images (12 uploads at a time).
+5. **Human Control.** Assign images and their specific roles to every clip. Character references name a character present in that clip. Composition references guide framing/blocking/pose; use notes to identify a panel in a full sheet or resolve conflicting traits. Review the neighboring start/end states and confirm the checkbox, then **Approve this plan**. Model output cannot grant approval.
+6. **Generate H3 clip prompts.** Generate all clips, or only the selected clip. Review/edit each result, copy/download it, or download the complete Markdown prompt pack and reference mapping. Each mapping offers image downloads with clip/reference-numbered filenames. Load them manually into your compatible ComfyUI workflow; prompt text does not contain the image files.
+
+### Reference modes and approval
+
+- **Ref2VA:** up to 9 assigned character/composition images per clip. Character sheets represent one subject from different views, not several people; storyboard grids and labels should not appear in the target video.
+- **I2VA / L2VA:** exactly one explicitly assigned first/last-frame panel.
+- **FL2VA:** exactly one first-frame and one last-frame panel, exported in that order. Full sheets cannot serve as endpoint frames. Use Ref2VA when combining character and composition references.
+- Any change to the reviewed story, characters, clip plan/order, images, crops or reference assignments requires human review again. Previous prompts remain, but changed-plan outputs cannot be copied/exported as current results. Reference uploads also invalidate approval even if not yet assigned.
+- Approval is enforced by the server, tied to the session, complete plan and media, and expires after 24 hours. Reopening a saved project or restarting the app requires another review. Unchanged saved outputs can be exported after reapproval without regeneration.
+- Saved projects include the storyboard, image prompts, sheets/crops, reference assignments, H3 outputs and up to 30 prior versions per clip. A failed/cancelled batch keeps the previous completed results. Storyboard image prompts become outdated when the underlying story/clip plan changes.
+
+Connection notes are suggestions for human review, not proof that generated videos will match. Inspect your ComfyUI renders. Automatic stitching, returned-render comparison and endpoint-frame feedback are outside this first implementation. The existing Video → Prompt workflow still describes the actual prepared clip; creative storyboard plans do not alter it. Krea's existing reference mode remains style-only.
+
+## H3 Prompts
+
+Choose T2VA, I2VA, FL2VA, L2VA, or Ref2VA. Enter a brief, duration, frame shape and optional visual style. Add the required media and describe what each reference should contribute. FL2VA image ordering is first frame then last frame; use the arrow buttons to reorder.
+
+Generate, review/edit, copy/download, or refine the prompt. Ref2VA runs the format audit and at most one narrow repair. Missing/invented reference tags or failed explicit reference constraints now reject the generated draft if repair fails; they cannot be returned as a successful prompt. Quality/length warnings remain advisory. A cancelled or failed generation retains the previous successful prompt. Custom H3 system instructions remain optional.
+
+Ref2VA references may be supplied **directly to H3**; uploading them to this prompt tool is optional. For example: “Make the girl in <Picture 1> act like the girl in the uploaded video.” The prompt should bind analyzed appearance to `<Picture 1>` and the complete performance to `<Video 1>`, without inventing what the unseen video contains. Name another source explicitly, such as `<Video 2>`, if needed. Keep the official six-section format and useful image details, along with the user's requested shots, camera work, scene and sound. Word guidance is not permission to invent a competing performance. Local uploads provide observations but are not a prerequisite for declaring H3 reference roles. Refinement retains the original brief and actual visual inputs; an earlier generated draft is not source evidence. The checks validate reference binding, not the semantic correctness of every generated sentence; review the output.
+
+Ordinary H3 mode retains the existing 1–20 second target duration range. Reference uploads allow up to nine images, three videos and three audio files, with twelve assets total; reference video/audio must be 2–15 seconds.
+
+## Video → Prompt
+
+1. Upload a video (up to 1 GB). Select a **2–15 second** range with start/end fields or playhead buttons. A qualifying short file may use its entire duration.
+2. **Prepare clip** creates a new MP4. The original stays untouched. The export uses H.264 video, AAC audio when present, accurate decoded trim boundaries, upright orientation, and clip-relative timestamps.
+3. **Analyze clip** observes that exact prepared artifact, using 0.2-second samples in overlapping batches of six. Uncertain regions may receive 0.1-second resampling, capped at 100 observations per analysis. This can require several model requests.
+4. Review and edit the shot/action/camera description. The app does not listen to or transcribe audio; its presence is metadata, not evidence of speech or music content.
+5. Optionally describe changes and upload replacement images. Assign each an explicit role: subject appearance, setting, or visual style. No unspecified traits should transfer.
+6. Generate the accompanying Ref2VA prompt. **`<Video 1>` means the prepared/exported clip**, not the full original. Image labels identify the replacement images in displayed order.
+7. Download the clip, copy/download the prompt, and optionally download the Markdown analysis. Matching filenames keep them together.
+
+The exported clip retains audio when present. **Use the clip's audio in the H3 prompt** separately enables its explicit reuse relationship. With that unchecked, the prompt ignores the source soundtrack.
+
+Changing the trim makes the prepared clip and prompt outdated. Prepare and analyze the new selection before generating again. Changing the reviewed analysis or replacement choices also disables copying/exporting the old prompt until regenerated. Returning to the exact previous selection may reuse its still-matching prepared artifact.
+
+### Manual ComfyUI workflow
+
+Download the MP4, load it into the video input of **your existing H3-capable ComfyUI workflow**, load any replacement images in Picture order, and paste the prompt into its text input. The app does not generate workflow JSON or assume particular custom nodes. Test compatibility with your own workflow; no ComfyUI instance is touched by app tests.
+
+## Krea 2
+
+- **Explore:** leave creative room.
+- **Direct:** follow a defined art direction.
+- **Reference-led:** derive visual style from up to six images without copying their subjects.
+
+Medium, composition, lighting, palette, must-keep details, chips and example inputs are retained. Generate a single paragraph, edit/refine it, and copy/download it. Krea uses its own prompt instructions, not the H3 audit.
+
+## Saved projects
+
+Use **Saved projects** to name and save the current workspace. A project includes all three pages' fields, uploaded media, prepared clips, reviewed analysis, prompt outputs and up to 30 prompt revisions per page.
+
+- Save is explicit. Unsaved changes trigger a browser leave warning.
+- Open restores media into a new temporary session; it works after app restart.
+- Saves copy media and commit a versioned manifest atomically. A failed save leaves the previous saved version intact.
+- Delete removes only app-managed project copies. It does not delete the original files you uploaded or the currently open draft.
+- There is no cloud project synchronization.
+
+Storage:
+
+| Data | Location |
+|---|---|
+| Saved projects | `~/.local/share/h3-promptwriter/projects/` |
+| Temporary media/previews | OS temp directory, `h3-promptwriter/` (reset at startup) |
+| Non-secret settings | `~/.config/h3-promptwriter/settings.json` |
+| OpenRouter key | macOS Keychain service `h3-promptwriter`, account `openrouter` |
+
+Tests use isolated paths through `H3_DATA_DIR`, `H3_CACHE_ROOT`, and `H3_SETTINGS_PATH`. These overrides are also useful for portable local data storage. Avoid starting two app processes against the same data/cache roots.
+
+## APIs
+
+Existing `/h3studio` status, provider-status, guide, assembly, generation/refinement, cancellation, media, and settings routes remain. The UI labels Reference mode as Ref2VA; the ordinary API retains `mode: "Reference"`.
+
+New routes:
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/h3studio/clips/source` | Adopt a validated uploaded source into a workspace |
+| POST | `/h3studio/clips/prepare` | Prepare a selected source segment (SSE) |
+| POST | `/h3studio/clips/analyze` | Analyze a prepared clip (SSE) |
+| POST | `/h3studio/video/generate` | Generate/refine its Ref2VA prompt (SSE) |
+| POST | `/kreastudio/generate`, `/kreastudio/refine` | Krea prompt generation/refinement (SSE) |
+| POST | `/h3studio/storyboard/develop` | Develop an editable story/clip plan (SSE) |
+| POST | `/h3studio/storyboard/images` | Write individual and combined-sheet image prompts (SSE) |
+| POST | `/h3studio/storyboard/crop` | Create a panel from normalized x/y/width/height coordinates (SSE) |
+| POST | `/h3studio/storyboard/approve`, `/h3studio/storyboard/revoke` | Explicit human review / reopen review |
+| POST | `/h3studio/storyboard/generate` | Generate approved clip prompts; optional `clip_id` selects one (SSE) |
+| GET/POST | `/h3studio/projects` | List or save projects |
+| POST | `/h3studio/projects/:id/open` | Restore a saved project |
+| DELETE | `/h3studio/projects/:id` | Delete a saved project |
+
+The media upload route additionally accepts workspace modes `VideoSource`, `Video` (replacement images/prepared clip), `Krea`, and `Storyboard` (image library). Media content supports HTTP range requests for playback and `download=1` for downloads. Storyboard image downloads also accept a safe `download_name` for matching the exported reference map.
+
+Clip requests identify the session and prepared/source asset IDs; video generation additionally requires its current analysis ID and optionally edited analysis text, image-role mapping, and audio opt-in. One model/media operation runs at a time across all pages. SSE events use `phase`, `delta`, `complete`, `error`, and `cancelled`.
+
+## Verification
 
 ```sh
 npm test
+npm run test:browser
 ```
 
-Unit tests cover request assembly (all five modes), validation limits and
-required media, prompt audit decisions, and the narrow-repair message
-construction. Browser verification uses the running app and a live model.
+Backend tests generate actual FFmpeg fixtures and verify exact trim starts, rotation, codecs, audio synchronization, silence, cancellation, project recovery, export guards, and HTTP playback/downloads. They open temporary loopback servers.
 
-## Troubleshooting
+Browser tests use headless Chromium, actual uploads/trimming/downloads and controlled model responses. They verify desktop/mobile interactions and save screenshots under `.cache/`. They do **not** evaluate live model quality. The browser test uses Playwright's installed Chromium, an explicit `H3_TEST_BROWSER` executable, or an existing cached macOS headless Chromium. If none is installed, run `npx playwright install chromium --only-shell`.
 
-**`ffmpeg: command not found`** — install it (`brew install ffmpeg`) and
-restart the app. The app doesn't bundle ffmpeg; it expects it on your PATH.
-
-**LM Studio returns `ECONNREFUSED`** — the local server isn't running. Open
-LM Studio → Developer tab → Start Server, then try again.
-
-**OpenRouter returns `401 Unauthorized`** — your API key is wrong, expired,
-or wasn't saved. Re-enter it in Settings and click **Save**.
-
-**OpenRouter returns `insufficient credits` or `rate limit`** — check your
-account at <https://openrouter.ai/>.
-
-**Generation hangs forever** — click **Cancel**. If the app is completely
-stuck, restart it. Note: session media is ephemeral and won't survive a
-restart — you'll need to re-upload references.
-
-**The audit says "needs review" but the prompt looks fine** — the audit is
-strict on purpose. Read the listed issues; if you disagree, ignore it and
-use the prompt as-is. The audit never blocks the output, it only flags.
-
-**Sharp install fails on Apple Silicon** — make sure Xcode Command Line
-Tools are installed: `xcode-select --install`.
-
-## How data is stored
-
-- **Session media** (uploaded images, videos, audio, generated previews and
-  contact sheets) lives in an OS temp directory (`$TMPDIR/h3-promptwriter/`).
-  It's wiped when the app starts and abandoned if the app crashes. No
-  persistence, no database.
-- **Settings** (provider, model IDs, advanced prefs) are stored in a JSON
-  file at `~/.config/h3-promptwriter/settings.json`.
-- **OpenRouter API key** is stored in the macOS Keychain under the service
-  name `h3-promptwriter`. It never touches the filesystem.
-
-## What this app is not
-
-- It does not run MiniMax H3 itself. It writes prompts you paste into your
-  H3 workflow.
-- It does not hear audio. Audio files are declared as `<Audio N>` references;
-  their role must come from your brief.
-- It does not package ffmpeg. You install it yourself.
-- It does not support Windows or other model families in v1. The audit and
-  chat-template handling are tuned for Qwen.
-
-## License
-
-See the upstream project for guide and code provenance. The MiniMax H3
-prompt-writing guides are vendored verbatim from the official
-`MiniMaxAI/MiniMax-H3` Hugging Face repository at revision
-`bfc8ed0353f5a9733be73e6b2c98ec0948195b86`.
+The original `h3-prompt-tool` is unchanged. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for local interface and upstream workflow provenance.

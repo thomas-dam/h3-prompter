@@ -1,9 +1,11 @@
 import express from "express";
+import { JOB } from "./lib/jobs.js";
+import { mountStudio } from "./studio_routes.js";
 import multer from "multer";
 import { dirname, join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { promises as fs, createReadStream } from "node:fs";
+import { promises as fs } from "node:fs";
 import { mkdir } from "node:fs/promises";
 
 import { MODE_GUIDES, guideCatalog, guideForMode } from "./lib/guides.js";
@@ -27,6 +29,7 @@ import {
 import { planContext, ContextPlanError } from "./lib/context.js";
 import { ModelError } from "./lib/contract.js";
 import { generate } from "./lib/generation.js";
+import { recoverRef2VARequest, ORIGINAL_REF2VA_SYSTEM } from "./lib/ref2va_original.js";
 import {
   loadSettings,
   saveSettings,
@@ -34,6 +37,7 @@ import {
   getOpenRouterKey,
   setOpenRouterKey,
   deleteOpenRouterKey,
+  localBaseUrl,
 } from "./lib/settings.js";
 
 export async function ensureCache() {
@@ -44,13 +48,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROUTE_PREFIX = "/h3studio";
 const MODES = new Set(["T2VA", "I2VA", "FL2VA", "L2VA", "Reference"]);
 
-const STATE = {
-  phase: "idle",
-  active_request_id: null,
-};
+const STATE = JOB;
 
-const GENERATION_CACHE = new Map();
-let activeAbortController = null;
 
 async function providerStatus() {
   const settings = loadSettings();
@@ -58,7 +57,7 @@ async function providerStatus() {
   let lmstudio;
 
   try {
-    const response = await fetch("http://127.0.0.1:1234/v1/models", {
+    const response = await fetch(`${localBaseUrl(settings)}/models`, {
       signal: AbortSignal.timeout(1200),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -86,7 +85,7 @@ async function providerStatus() {
       ready: false,
       model_available: false,
       models: [],
-      message: "Start LM Studio’s local server on port 1234.",
+      message: `Cannot reach LM Studio at ${localBaseUrl(settings)}. Start its server or check the address.`,
     };
   }
 
@@ -138,12 +137,13 @@ function sendError(res, error) {
 const upload = multer({
   storage: multer.diskStorage({
     destination: async (req, file, cb) => {
-      const sessionId = req._h3_session_id || randomUUID();
-      req._h3_session_id = sessionId;
-      const dir = join(CACHE_ROOT, sessionId, randomUUID());
-      await mkdir(dir, { recursive: true });
-      req._h3_asset_dir = dir;
-      cb(null, dir);
+      try {
+        const sessionId = req._h3_session_id || parseSessionId(req.body?.session_id);
+        req._h3_session_id = sessionId;
+        const dir = join(CACHE_ROOT, sessionId, randomUUID());
+        await mkdir(dir, { recursive: true });
+        cb(null, dir);
+      } catch (error) { cb(error); }
     },
     filename: (req, file, cb) => {
       const ext = extname(file.originalname).toLowerCase();
@@ -153,13 +153,20 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_BYTES },
 });
 
-export function createServer() {
+export function createServer(options = {}) {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
+  app.use((req, res, next) => {
+    // This is a personal local service, not a cross-origin upload/proxy endpoint.
+    if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}` && req.headers.origin !== `https://${req.headers.host}`) return res.status(403).json({ error: { code: "ORIGIN_REJECTED", message: "Cross-origin requests are not allowed." } });
+    if (STATE.active_request_id && req.path.startsWith("/h3studio/media") && req.method !== "GET") return res.status(409).json({ error: { code: "GENERATION_BUSY", message: "Wait for the active operation before changing media." } });
+    next();
+  });
 
   app.get(`${ROUTE_PREFIX}/status`, (req, res) => {
     res.json({
-      ...STATE,
+      phase: STATE.phase,
+      active_request_id: STATE.active_request_id,
       backend_ready: true,
       version: "1.0.0",
     });
@@ -182,7 +189,7 @@ export function createServer() {
   app.get(`${ROUTE_PREFIX}/system-prompt/:mode`, (req, res) => {
     const mode = req.params.mode;
     try {
-      const prompt = systemPromptForMode(mode);
+      const prompt = mode === 'Reference' ? ORIGINAL_REF2VA_SYSTEM : systemPromptForMode(mode);
       res.json({ mode, profile: mode === "Reference" ? "reference" : "standard", system_prompt: prompt });
     } catch (error) {
       sendError(res, error);
@@ -194,7 +201,7 @@ export function createServer() {
       const sessionId = parseSessionId(req.body?.session_id);
       const mode = req.body?.mode;
       const manifest = STORE.manifest(sessionId, mode);
-      const assembled = assembleRequest(req.body, { manifest });
+      const assembled = recoverRef2VARequest(assembleRequest(req.body, { manifest }), req.body);
       res.json({ request: assembled });
     } catch (error) {
       if (error instanceof Error && error.message === "Invalid session ID") {
@@ -219,7 +226,7 @@ export function createServer() {
 
       const sessionId = parseSessionId(body.session_id);
       const manifest = STORE.manifest(sessionId, body.mode);
-      const assembled = assembleRequest(body, { manifest });
+      const assembled = recoverRef2VARequest(assembleRequest(body, { manifest }), body);
 
       let runtimePlan;
       try {
@@ -235,7 +242,7 @@ export function createServer() {
       const requestId = randomUUID();
       STATE.active_request_id = requestId;
       STATE.phase = "generating";
-      activeAbortController = new AbortController();
+      JOB.controller = new AbortController();
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -248,19 +255,20 @@ export function createServer() {
         sendEvent({ type: "phase", phase: "generating", request_id: requestId });
         const result = await generate({
           assembled,
+          chatCompletion: options.chatCompletion,
           provider,
           modelId: body.model_id,
           settings,
           runtimePlan,
           thinking: !!body.thinking,
           seed: body.seed,
+          temperature: 0.4,
           sessionStore: STORE,
-          signal: activeAbortController.signal,
+          signal: JOB.controller.signal,
           onDelta: (delta) => {
             sendEvent({ type: "delta", content: delta });
           },
         });
-        GENERATION_CACHE.set(sessionId, result.prompt);
         sendEvent({ type: "complete", result: { request_id: requestId, model_id: body.model_id, thinking: !!body.thinking, ...result } });
       } catch (error) {
         if (error.message?.startsWith("GENERATION_CANCELLED") || error.code === "GENERATION_CANCELLED") {
@@ -271,7 +279,7 @@ export function createServer() {
       } finally {
         STATE.active_request_id = null;
         STATE.phase = "idle";
-        activeAbortController = null;
+        JOB.controller = null;
         res.end();
       }
     } catch (error) {
@@ -282,7 +290,7 @@ export function createServer() {
   app.post(`${ROUTE_PREFIX}/cancel`, (req, res) => {
     if (!STATE.active_request_id) return res.json({ cancelled: false, reason: "idle" });
     STATE.phase = "cancelling";
-    activeAbortController?.abort();
+    JOB.controller?.abort();
     res.json({ cancelled: true });
   });
 
@@ -300,7 +308,7 @@ export function createServer() {
 
       const sessionId = parseSessionId(body.session_id);
       const manifest = STORE.manifest(sessionId, body.mode);
-      const assembled = assembleRefinement(body, { manifest }, GENERATION_CACHE.get(sessionId));
+      const assembled = recoverRef2VARequest(assembleRefinement(body, { manifest }), body);
 
       let runtimePlan;
       try {
@@ -316,7 +324,7 @@ export function createServer() {
       const requestId = randomUUID();
       STATE.active_request_id = requestId;
       STATE.phase = "generating";
-      activeAbortController = new AbortController();
+      JOB.controller = new AbortController();
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -329,14 +337,16 @@ export function createServer() {
         sendEvent({ type: "phase", phase: "generating", request_id: requestId });
         const result = await generate({
           assembled,
+          chatCompletion: options.chatCompletion,
           provider,
           modelId: body.model_id,
           settings,
           runtimePlan,
           thinking: !!body.thinking,
           seed: body.seed,
+          temperature: 0.4,
           sessionStore: STORE,
-          signal: activeAbortController.signal,
+          signal: JOB.controller.signal,
           onDelta: (delta) => sendEvent({ type: "delta", content: delta }),
         });
         sendEvent({ type: "complete", result: { request_id: requestId, model_id: body.model_id, thinking: !!body.thinking, ...result } });
@@ -349,7 +359,7 @@ export function createServer() {
       } finally {
         STATE.active_request_id = null;
         STATE.phase = "idle";
-        activeAbortController = null;
+        JOB.controller = null;
         res.end();
       }
     } catch (error) {
@@ -363,21 +373,21 @@ export function createServer() {
         if (err.code === "LIMIT_FILE_SIZE") return res.status(400).json({ error: { code: "MEDIA_TOO_LARGE", message: "A media file cannot exceed 1 GB." } });
         return res.status(400).json({ error: { code: "INVALID_REQUEST", message: err.message } });
       }
+      const uploaded = [];
+      let sessionId;
       try {
-        let sessionId;
-        try { sessionId = parseSessionId(req.body.session_id); } catch { return res.status(400).json({ error: { code: "INVALID_SESSION", message: "The media session ID is invalid." } }); }
+        sessionId = parseSessionId(req.body.session_id);
         const mode = req.body.mode;
-        if (!(mode in MODE_LIMITS)) return res.status(400).json({ error: { code: "INVALID_MODE", message: "Select a valid mode before uploading media." } });
-        const uploaded = [];
-        const uploadedIds = [];
+        if (!(mode in MODE_LIMITS)) throw new MediaError("INVALID_MODE", "Select a valid mode before uploading media.");
         for (const file of req.files || []) {
           const asset = await STORE.add(sessionId, mode, file.originalname, file.mimetype, file.path);
           uploaded.push(asset);
-          uploadedIds.push(asset.id);
         }
         if (!uploaded.length) return res.status(400).json({ error: { code: "INVALID_REQUEST", message: "No media files were provided." } });
         res.status(201).json({ session_id: sessionId, assets: uploaded });
       } catch (error) {
+        for (const asset of uploaded) await STORE.remove(sessionId, asset.id);
+        for (const file of req.files || []) await fs.rm(dirname(file.path), { recursive: true, force: true }).catch(() => {});
         sendError(res, error);
       }
     });
@@ -419,10 +429,12 @@ export function createServer() {
       } else {
         path = asset._original_path;
       }
-      const stat = await fs.stat(path);
-      res.setHeader("Content-Length", stat.size);
-      res.setHeader("Content-Type", asset.mime_type || "application/octet-stream");
-      createReadStream(path).pipe(res);
+      if (req.query.download === "1") {
+        const requestedName = req.query.download_name;
+        const filename = asset.mode === "Storyboard" && typeof requestedName === "string" && /^[\p{L}\p{N}_.-]{1,200}$/u.test(requestedName) ? requestedName : asset.filename;
+        return res.download(path, filename);
+      }
+      return res.sendFile(path);
     } catch (error) {
       res.status(404).json({ error: { code: "MEDIA_NOT_FOUND", message: "The media asset was not found." } });
     }
@@ -442,7 +454,6 @@ export function createServer() {
     try {
       const sessionId = parseSessionId(req.query.session_id);
       await STORE.clear(sessionId);
-      GENERATION_CACHE.delete(sessionId);
       res.json({ cleared: true });
     } catch (error) {
       sendError(res, error);
@@ -471,8 +482,8 @@ export function createServer() {
 
   app.put(`${ROUTE_PREFIX}/settings`, (req, res) => {
     const { openrouter_key, ...rest } = req.body || {};
-    const saved = saveSettings(rest);
-    res.json({ settings: saved });
+    try { res.json({ settings: saveSettings(rest) }); }
+    catch (error) { res.status(400).json({ error: { code: "INVALID_SETTINGS", message: error.message } }); }
   });
 
   app.post(`${ROUTE_PREFIX}/settings/openrouter-key`, (req, res) => {
@@ -486,6 +497,9 @@ export function createServer() {
     deleteOpenRouterKey();
     res.json({ deleted: true });
   });
+
+  mountStudio(app, options);
+  app.get("/krea2.html", (_req, res) => res.redirect("/#krea"));
 
   app.use(express.static(join(__dirname, "..", "public")));
 

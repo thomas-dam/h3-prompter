@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
-const SETTINGS_PATH = join(homedir(), ".config", "h3-promptwriter", "settings.json");
+const SETTINGS_PATH = process.env.H3_SETTINGS_PATH || join(homedir(), ".config", "h3-promptwriter", "settings.json");
 
 const DEFAULTS = {
   provider: "lmstudio",
+  lmstudio_base_url: "http://127.0.0.1:1234/v1",
   lmstudio_model_id: "",
   lmstudio_context_profile: "auto",
   lmstudio_kv_cache: "auto",
@@ -32,11 +33,20 @@ export function loadSettings() {
 }
 
 export function saveSettings(partial) {
+  if (partial.lmstudio_base_url !== undefined) partial.lmstudio_base_url = localBaseUrl(partial);
   const current = loadSettings();
   const next = { ...current, ...partial };
   ensureDir();
   writeFileSync(SETTINGS_PATH, JSON.stringify(next, null, 2), "utf8");
   return redact(next);
+}
+
+export function localBaseUrl(settings) {
+  const url = new URL(settings.lmstudio_base_url || DEFAULTS.lmstudio_base_url);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error("LM Studio requires an HTTP(S) base URL without credentials, query, or fragment.");
+  }
+  return url.href.replace(/\/$/, "");
 }
 
 export function redact(settings) {

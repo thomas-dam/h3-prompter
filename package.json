@@ -6,8 +6,12 @@
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
+    "stop": "node scripts/server-control.js stop",
+    "status": "node scripts/server-control.js status",
+    "start:lan": "HOST=0.0.0.0 node src/main.js",
     "dev": "node --watch src/main.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:browser": "node --test tests/browser.test.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -15,6 +19,9 @@
   "dependencies": {
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1",
-    "sharp": "^0.33.5"
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   }
 }

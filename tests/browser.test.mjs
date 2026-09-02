@@ -1,0 +1,242 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { chromium } from '@playwright/test';
+import { promises as fs, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
+import sharp from 'sharp';
+import { storyboardReply } from './fixtures/storyboard.js';
+import { motionBrief, motionPrompt, inventedMotionPrompt } from './fixtures/motion-reference.js';
+
+const root=await fs.mkdtemp(join(tmpdir(),'h3-browser-'));
+process.env.H3_CACHE_ROOT=join(root,'cache');process.env.H3_DATA_DIR=join(root,'projects');process.env.H3_SETTINGS_PATH=join(root,'settings.json');
+await fs.writeFile(process.env.H3_SETTINGS_PATH,JSON.stringify({provider:'lmstudio',lmstudio_model_id:'test-vision'}));
+const {createServer}=await import('../src/server.js');
+const {runMedia}=await import('../src/lib/video.js');
+let server,browser,base,source;
+const errors=[];
+const motionCalls=[];
+async function mockModel({payload,signal,onDelta}) {
+  if(payload.model==='slow-vision')await new Promise((resolve,reject)=>{const timer=setTimeout(resolve,15000);signal.addEventListener('abort',()=>{clearTimeout(timer);reject(new Error('GENERATION_CANCELLED: cancelled'));},{once:true});});
+  const messages=JSON.stringify(payload.messages);
+  let content;
+  if(messages.includes('Resolved motion-reference instructions')) { motionCalls.push(payload); content=payload.model==='missing-video'?inventedMotionPrompt:motionPrompt; }
+  else if(storyboardReply(payload))content=storyboardReply(payload);
+  else if(messages.includes('uncertain_times'))content=JSON.stringify({notes:'At 00:00.000 a colored pattern moves. The camera stays fixed.',uncertain_times:[]});
+  else if(messages.includes('Consolidate these observations'))content=JSON.stringify({summary:'A moving colored test pattern.',shots:[{start:0,description:'Continuous motion with a static camera. No cut.'}],uncertainties:[]});
+  else if(messages.includes('Krea 2 image generation'))content='Three red chairs stand in soft window light, their painted surfaces set against a quiet pale wall.';
+  else if(messages.includes('exported clip <Video 1>'))content='subject_definitions:\n<Video 1> is the exported clip and provides motion and timing.\n\nsummary:\n[reference generation] Recreate the observed motion.\n\nretention_analysis:\n<Video 1>: fully_preserved - retain its temporal structure.\n\ndetailed_description:\n[Shot 1] A moving colored test pattern fills a vertical frame. The camera remains fixed while the pattern moves continuously from start to finish. Preserve the motion and timing of <Video 1>.\n\noverall_soundscape:\nN/A\n\nnon_diegetic_music:\nN/A';
+  else content='integrated_multimodal_description:\n[Shot 1] Three red chairs sit in soft window light. The camera remains still.\n\noverall_soundscape:\nA quiet room.\n\nnon_diegetic_music:\nN/A';
+  onDelta?.(content);
+  return {choices:[{message:{content},finish_reason:'stop'}],usage:{prompt_tokens:100,completion_tokens:100}};
+}
+before(async()=>{
+  await fs.mkdir(process.env.H3_CACHE_ROOT,{recursive:true});await fs.mkdir('.cache',{recursive:true});source=join(root,'source.mp4');
+  await runMedia('ffmpeg',['-v','error','-y','-f','lavfi','-i','testsrc2=size=120x160:rate=25:duration=5','-c:v','libx264',source]);
+  const app=createServer({chatCompletion:mockModel});
+  app.get('/__original.html',(_req,res)=>res.sendFile('/Users/lisa/src/h3-prompt-tool/index.html'));
+  server=app.listen(0,'127.0.0.1');await new Promise((resolve,reject)=>{server.once('listening',resolve);server.once('error',reject);});base=`http://127.0.0.1:${server.address().port}`;
+  let executablePath=process.env.H3_TEST_BROWSER;
+  if(!executablePath&&!existsSync(chromium.executablePath())&&process.platform==='darwin') {
+    const cache=join(homedir(),'Library','Caches','ms-playwright');
+    const candidates=(await fs.readdir(cache).catch(()=>[])).filter(n=>n.startsWith('chromium_headless_shell-')).sort().reverse();
+    executablePath=candidates.map(n=>join(cache,n,`chrome-headless-shell-mac-${process.arch==='arm64'?'arm64':'x64'}`,'chrome-headless-shell')).find(existsSync);
+    if(executablePath)console.log('Using existing cached Chromium for browser verification.');
+  }
+  browser=await chromium.launch({headless:true,executablePath,args:['--host-resolver-rules=MAP h3-lan.test 127.0.0.1']});
+});
+after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));if(base)await assert.rejects(fetch(base+'/h3studio/status',{signal:AbortSignal.timeout(1000)}));await fs.rm(root,{recursive:true,force:true});});
+async function pageReady() {
+  const context=await browser.newContext({viewport:{width:1280,height:1000},acceptDownloads:true,permissions:['clipboard-read','clipboard-write']});
+  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(base);await page.waitForFunction(()=>document.querySelector('#modelId').value==='test-vision');return page;
+}
+test('desktop: H3, Krea, trim/analyze/export and project reopen work through the real UI',async()=>{
+  const page=await pageReady();
+  await page.screenshot({path:'.cache/studio-desktop.png',fullPage:true});
+  assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(8, 17, 31)');
+  await page.locator('#brief').fill('Three red chairs in a quiet room.');await page.locator('#generate').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  assert.match(await page.locator('#output').inputValue(),/Three red chairs/);
+  await page.locator('#copyPrompt').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Three red chairs/);
+  await page.locator('[data-page="krea"]').click();await page.locator('[data-preset="editorial"]').click();assert.match(await page.locator('#idea').inputValue(),/ceramicist/);
+  await page.locator('#generate').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));assert.match(await page.locator('#output').inputValue(),/Three red chairs/);
+  await page.locator('[data-page="video"]').click();await page.locator('#videoPane').waitFor({state:'visible'});await page.locator('#sourceFile').setInputFiles(source);await page.waitForFunction(()=>document.querySelector('#status').textContent==='Media ready.');
+  await page.locator('#trimStart').fill('1.28');await page.locator('#trimEnd').fill('4.28');await page.locator('#prepareClip').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.startsWith('Clip prepared'));
+  assert.equal(await page.locator('#downloadClip').isEnabled(),true);
+  await page.locator('#analyzeClip').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.startsWith('Analysis ready'));
+  assert.match(await page.locator('#analysisText').inputValue(),/moving colored/);
+  await page.locator('#generate').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  assert.match(await page.locator('#output').inputValue(),/<Video 1>/);
+  const downloading=page.waitForEvent('download');await page.locator('#downloadClip').click();const download=await downloading;assert.match(download.suggestedFilename(),/_clip\.mp4$/);await download.saveAs(join(root,'exported.mp4'));
+  const prompting=page.waitForEvent('download');await page.locator('#downloadPrompt').click();assert.match((await prompting).suggestedFilename(),/_clip_prompt\.txt$/);
+  await page.locator('#trimStart').fill('1.4');assert.equal(await page.locator('#copyPrompt').isDisabled(),true);assert.equal(await page.locator('#downloadClip').isDisabled(),true);assert.match(await page.locator('#audit').textContent(),/Outdated/);
+  await page.locator('#trimStart').fill('1.28');assert.equal(await page.locator('#copyPrompt').isEnabled(),true);
+  await page.locator('#projectsPanel summary').click();await page.locator('#projectName').fill('Browser project');await page.locator('#saveProject').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Project and media saved'));
+  await page.locator('#newProject').click();assert.equal(await page.locator('#output').inputValue(),'');await page.locator('#openProject').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Project restored'));
+  assert.match(await page.locator('#output').inputValue(),/<Video 1>/);assert.match(await page.locator('#analysisText').inputValue(),/moving colored/);assert.equal(await page.locator('#downloadClip').isEnabled(),true);
+  await page.locator('#clipPlayer').evaluate(el=>el.play());
+  await page.waitForFunction(()=>document.querySelector('#clipPlayer').currentTime>0.1);
+  await page.locator('#clipPlayer').evaluate(el=>el.pause());
+  await page.screenshot({path:'.cache/studio-video.png',fullPage:true});
+  const original=await page.context().newPage();await original.goto(base+'/__original.html');await original.screenshot({path:'.cache/original-desktop.png',fullPage:true});await original.close();
+  assert.deepEqual(errors,[]);await page.context().close();
+});
+test('mobile layout fits the viewport and cancellation preserves the last successful prompt',async()=>{
+  const page=await pageReady();await page.setViewportSize({width:390,height:844});
+  await page.locator('#brief').fill('Three red chairs.');await page.locator('#generate').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));const previous=await page.locator('#output').inputValue();
+  await page.locator('#settingsPanel summary').first().click();await page.locator('#modelId').fill('slow-vision');await page.locator('#generate').click();await page.locator('#cancel').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Cancelled'));
+  assert.equal(await page.locator('#output').inputValue(),previous);assert.equal(await page.locator('#copyPrompt').isEnabled(),true);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));await page.screenshot({path:'.cache/studio-mobile.png',fullPage:true});
+  assert.deepEqual(errors,[]);await page.context().close();
+});
+
+test('Ref2VA supports both observed uploads and references supplied directly to H3', async () => {
+  const page=await pageReady();
+  await page.locator('#h3Modes [data-mode="Reference"]').click();
+  const picture=join(root,'motion-character.png');await sharp({create:{width:120,height:160,channels:3,background:'#445588'}}).png().toFile(picture);
+  await page.locator('#h3Files').setInputFiles([picture,source]);
+  await page.waitForFunction(()=>document.querySelector('#status').textContent==='Media ready.');
+  assert.match(await page.locator('#h3Media').textContent(),/<Picture 1>/);assert.match(await page.locator('#h3Media').textContent(),/<Video 1>/);
+  await page.locator('#brief').fill(motionBrief);await page.locator('#generate').click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  assert.equal(await page.locator('#output').inputValue(),motionPrompt);
+  const parts=motionCalls.at(-1).messages[1].content;
+  assert.equal(parts.filter(p=>p.type==='image_url').length,2);
+  assert.ok(parts.some(p=>p.type==='text'&&p.text.startsWith('<Picture 1>: image reference')));
+  assert.ok(parts.some(p=>p.type==='text'&&p.text.startsWith('<Video 1>: one ordered contact sheet')));
+  await page.locator('#copyPrompt').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),motionPrompt);
+  const revisions=await page.locator('#revisions option').count();
+  await page.locator('#settingsPanel > summary').click();await page.locator('#modelId').fill('missing-video');
+  await page.locator('#generate').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('failed draft was not saved'));
+  assert.match(await page.locator('#status').textContent(),/<Video 1>/);
+  assert.equal(await page.locator('#output').inputValue(),motionPrompt);assert.equal(await page.locator('#revisions option').count(),revisions);
+  await page.getByRole('button',{name:'Remove source.mp4',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('#h3Media').textContent.includes('<Video 1>'));
+  await page.getByRole('button',{name:'Remove motion-character.png',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('#h3Media').textContent.trim());
+  await page.locator('#modelId').fill('test-vision');await page.locator('#generate').click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  assert.equal(await page.locator('#output').inputValue(),motionPrompt);
+  const external=motionCalls.at(-1).messages[1].content;
+  assert.equal(external.filter(p=>p.type==='image_url').length,0);
+  assert.ok(external.some(p=>p.type==='text'&&p.text.includes('<Video 1>: supplied directly to H3, not inspected')));
+  assert.deepEqual(errors,[]);await page.context().close();
+});
+
+test('HTTP LAN origin supports sessions, uploads, copying and manual-copy fallback',async()=>{
+  const context=await browser.newContext();
+  await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:base});
+  const page=await context.newPage();page.on('dialog',d=>d.accept());
+  const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+  await page.goto(base.replace('127.0.0.1','h3-lan.test'));
+  await page.waitForFunction(()=>document.querySelector('#modelId').value==='test-vision');
+  assert.equal(await page.evaluate(()=>isSecureContext),false);
+  assert.equal(await page.evaluate(()=>typeof crypto.randomUUID),'undefined');
+  assert.equal(await page.evaluate(()=>typeof navigator.clipboard),'undefined');
+  await page.locator('#projectsPanel summary').click();await page.locator('#newProject').click();
+  await page.locator('#brief').fill('Three red chairs.');await page.locator('#generate').click();
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  const prompt=await page.locator('#output').inputValue();
+  await page.locator('#copyPrompt').click();assert.equal(await page.locator('#toast').textContent(),'Prompt copied.');
+  const reader=await context.newPage();await reader.goto(base);
+  assert.equal(await reader.evaluate(()=>navigator.clipboard.readText()),prompt);await reader.close();
+  await page.bringToFront();
+  await page.evaluate(()=>{document.execCommand=()=>false;});await page.locator('#copyPrompt').click();
+  assert.match(await page.locator('#toast').textContent(),/Press ⌘C \/ Ctrl\+C/);
+  assert.equal(await page.locator('#output').evaluate(el=>el.value.slice(el.selectionStart,el.selectionEnd)),prompt);
+  await page.locator('[data-page="video"]').click();await page.locator('#sourceFile').setInputFiles(source);
+  await page.waitForFunction(()=>document.querySelector('#status').textContent==='Media ready.');
+  assert.match(await page.locator('#sourceInfo').textContent(),/source.mp4/);
+  assert.deepEqual(pageErrors,[]);await context.close();
+});
+
+test('LM Studio dropdown lists every model, keeps selections and supports manual IDs',async()=>{
+  const context=await browser.newContext();
+  let models=['test-vision','another-vision','text-model'],connected=true;
+  await context.route('**/h3studio/provider-status',route=>route.fulfill({json:{providers:{
+    lmstudio:{connected,models,ready:connected,message:connected?'LM Studio connected.':'Cannot reach LM Studio.'},
+    openrouter:{ready:false,message:'Save an OpenRouter API key to continue.'}
+  }}}));
+  const page=await context.newPage();const pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));
+  await page.goto(base);await page.locator('#settingsPanel summary').first().click();
+  await page.waitForFunction(()=>document.querySelector('#modelList').options.length===4);
+  assert.equal(await page.locator('#modelList').inputValue(),'test-vision');
+  assert.deepEqual(await page.locator('#modelList option').evaluateAll(options=>options.map(o=>o.value)),['',...models]);
+  await page.locator('#modelList').selectOption('another-vision');assert.equal(await page.locator('#modelId').inputValue(),'another-vision');
+  await page.locator('#brief').fill('Three red chairs.');
+  const generating=page.waitForRequest(r=>r.url().endsWith('/h3studio/generate')&&r.method()==='POST');
+  await page.locator('#generate').click();assert.equal((await generating).postDataJSON().model_id,'another-vision');
+  await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('Prompt ready'));
+  await page.locator('#saveSettings').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Model settings saved.');
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#modelList').value==='another-vision');
+  await page.locator('#settingsPanel summary').first().click();
+  await page.locator('#modelId').fill('manual-model-id');assert.equal(await page.locator('#modelList').inputValue(),'');
+  models=[...models,'newly-available-model'];await page.locator('#refreshProvider').click();
+  await page.waitForFunction(()=>document.querySelector('#modelList').options.length===5);
+  assert.equal(await page.locator('#modelId').inputValue(),'manual-model-id');
+  models=[];await page.locator('#refreshProvider').click();
+  await page.waitForFunction(()=>document.querySelector('#modelListHint').textContent.includes('empty list'));
+  assert.equal(await page.locator('#modelList').isDisabled(),true);
+  assert.equal(await page.locator('#modelId').inputValue(),'manual-model-id');
+  connected=false;await page.locator('#refreshProvider').click();
+  await page.waitForFunction(()=>document.querySelector('#modelListHint').textContent.includes('Check the saved server address'));
+  assert.equal(await page.locator('#modelId').isEnabled(),true);
+  await page.locator('#provider').selectOption('openrouter');assert.equal(await page.locator('#localModelPicker').isHidden(),true);
+  await page.locator('#modelId').fill('provider/cloud-model');assert.equal(await page.locator('#modelId').inputValue(),'provider/cloud-model');
+  await page.locator('#provider').selectOption('lmstudio');assert.equal(await page.locator('#modelId').inputValue(),'another-vision');
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.deepEqual(pageErrors,[]);await context.close();
+});
+
+test('storyboard: story, image prompts, crop, human approval, H3 exports and project restore',async()=>{
+  const context=await browser.newContext({viewport:{width:1280,height:1000},permissions:['clipboard-read','clipboard-write'],acceptDownloads:true});
+  const page=await context.newPage(),pageErrors=[];page.on('pageerror',e=>pageErrors.push(e.message));page.on('dialog',d=>d.accept());
+  const sheetPath=join(root,'character_sheet.png');
+  await sharp({create:{width:320,height:160,channels:3,background:'#263650'}}).composite([{input:await sharp({create:{width:140,height:140,channels:3,background:'#b86955'}}).png().toBuffer(),left:170,top:10}]).png().toFile(sheetPath);
+  await page.goto(base+'/#storyboard');await page.waitForFunction(()=>!!document.querySelector('#modelId').value);
+  assert.equal(await page.locator('#legacyWorkspace').isHidden(),true);
+  await page.locator('#sbIdea').fill('Sara lifts a letter at a café. Two camera angles continue the same action.');await page.locator('#sbCount').selectOption('2');await page.locator('#sbDevelop').click();
+  await page.waitForFunction(()=>document.querySelector('#sbTitle').value==='The letter');
+  assert.equal(await page.locator('#sbClips .story-clip').count(),2);
+  assert.equal(await page.locator('#sbGenerateAll').isDisabled(),true);
+  await page.locator('#sbImageGenerate').click();await page.waitForFunction(()=>document.querySelector('#sbImagePrompt').value.includes('navy coat'));
+  await page.locator('#sbCopyImage').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/navy coat/);
+  await page.locator('#sbImportKind').selectOption('character_sheet');await page.locator('#sbFiles').setInputFiles(sheetPath);
+  await page.waitForFunction(()=>document.querySelectorAll('#sbLibrary .story-subcard').length===1);
+  await page.getByRole('button',{name:'Select panel / crop',exact:true}).first().click();await page.locator('#sbCropRows').fill('1');await page.locator('#sbCropCell').fill('2');await page.locator('#sbCropGrid').click();await page.locator('#sbCropSave').click();
+  await page.locator('#sbCropDialog').waitFor({state:'hidden'});assert.equal(await page.locator('#sbLibrary .story-subcard').count(),2);
+  const panel=page.locator('#sbLibrary .story-subcard').nth(1);await panel.getByLabel('Image type',{exact:true}).selectOption('storyboard_panel');
+  for(let i=0;i<2;i++){const assignment=page.locator('#sbAssignments > .story-subcard').nth(i);await assignment.getByRole('button',{name:'Add reference',exact:true}).click();await assignment.getByRole('button',{name:'Add reference',exact:true}).click();}
+  assert.equal(await page.locator('#sbApprove').isDisabled(),true);
+  await page.locator('#sbReviewed').check();assert.equal(await page.locator('#sbApprove').isEnabled(),true);await page.locator('#sbApprove').click();
+  await page.waitForFunction(()=>document.querySelector('#sbApprovalStatus').textContent.startsWith('Approved by you'));
+  await page.locator('#sbGenerateAll').click();await page.waitForFunction(()=>document.querySelector('#sbStatus').textContent.startsWith('H3 clip prompts ready'));
+  assert.match(await page.locator('#sbResult').inputValue(),/<Picture 2>/);
+  await page.locator('#sbCopyResult').click();assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Sara/);
+  const downloading=page.waitForEvent('download');await page.locator('#sbDownloadAll').click();const exported=await downloading;await exported.saveAs(join(root,'storyboard-export.md'));assert.match(await fs.readFile(join(root,'storyboard-export.md'),'utf8'),/Clip 02/);assert.match(await fs.readFile(join(root,'storyboard-export.md'),'utf8'),/character_sheet_panel_[a-f0-9]+.png/);
+  const oldPrompt=await page.locator('#sbResult').inputValue();
+  await page.locator('#sbClips .story-clip').first().getByLabel('End state · handoff to next clip',{exact:true}).fill('Letter held higher in the right hand.');
+  assert.equal(await page.locator('#sbGenerateAll').isDisabled(),true);assert.equal(await page.locator('#sbCopyResult').isDisabled(),true);assert.equal(await page.locator('#sbReviewed').isChecked(),false);assert.equal(await page.locator('#sbResult').inputValue(),oldPrompt);
+  await page.locator('#sbReviewed').check();await page.locator('#sbApprove').click();await page.waitForFunction(()=>!document.querySelector('#sbGenerateAll').disabled);
+  assert.equal(await page.locator('#sbCopyResult').isDisabled(),true);
+  await page.locator('#sbGenerateOne').click();await page.waitForFunction(()=>document.querySelector('#sbStatus').textContent.startsWith('H3 clip prompts ready'));assert.equal(await page.locator('#sbCopyResult').isEnabled(),true);assert.equal(await page.locator('#sbDownloadAll').isDisabled(),true);
+  await page.locator('#sbGenerateAll').click();await page.waitForFunction(()=>!document.querySelector('#sbDownloadAll').disabled);
+  await page.locator('#projectsPanel summary').click();await page.locator('#projectName').fill('Storyboard browser project');
+  const saving=page.waitForRequest(r=>r.url().endsWith('/h3studio/projects')&&r.method()==='POST');await page.locator('#saveProject').click();
+  assert.equal((await saving).postDataJSON().state.storyboard.approval,null);
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Project and media saved on this Mac.');
+  await page.locator('#newProject').click();assert.equal(await page.locator('#sbTitle').inputValue(),'');
+  await page.locator('#openProject').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Project restored with its media.');
+  assert.equal(await page.locator('#sbTitle').inputValue(),'The letter');assert.equal(await page.locator('#sbLibrary .story-subcard').count(),2);assert.equal(await page.locator('#sbGenerateAll').isDisabled(),true);
+  await page.locator('#sbReviewed').check();await page.locator('#sbApprove').click();await page.waitForFunction(()=>!document.querySelector('#sbGenerateAll').disabled);
+  assert.equal(await page.locator('#sbDownloadAll').isEnabled(),true);
+  const referenceLink=page.locator('#sbReferenceMap a').nth(1),referenceName=new URL(await referenceLink.getAttribute('href'),base).searchParams.get('download_name');
+  const media=page.waitForEvent('download');await referenceLink.click();assert.equal((await media).suggestedFilename(),referenceName);assert.match(referenceName,/^clip_01_ref_02_.*_panel_[a-f0-9]+\.png$/);
+  await page.locator('#settingsPanel summary').first().click();await page.locator('#modelId').fill('slow-vision');const previous=await page.locator('#sbResult').inputValue();
+  await page.locator('#sbGenerateAll').click();await page.locator('#sbCancel').click();await page.waitForFunction(()=>document.querySelector('#sbStatus').textContent.includes('Cancelled'));
+  assert.equal(await page.locator('#sbResult').inputValue(),previous);assert.equal(await page.locator('#sbCopyResult').isEnabled(),true);
+  await page.locator('#settingsPanel summary').first().click();
+  for(const details of await page.locator('#sbClips .story-clip').all())if(await details.getAttribute('open')!==null)await details.locator('summary').click();
+  await page.locator('#sbStoryDetails summary').click();await page.screenshot({path:'.cache/storyboard-desktop.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'.cache/storyboard-mobile.png',fullPage:true});
+  assert.deepEqual(pageErrors,[]);await context.close();
+});

@@ -1,101 +1,76 @@
-# Standalone H3 Prompt Writer
+# Unified Prompt Studio implementation
 
-## Summary
+The app combines the original h3-prompt-tool graphical style, this repository's provider/media/prompt backend, Krea's separate instruction set, and a video analysis workflow adapted from video-to-h3-prompt.
 
-Standalone macOS Node.js/Express web app for editing MiniMax H3 prompts using
-local LM Studio or cloud OpenRouter. No ComfyUI dependency.
+## Protected requirements
 
-Qwen-only. The app assumes a Qwen chat template and Qwen token behavior
-throughout. The user types the specific Qwen model ID manually (e.g.
-`qwen3-235b-a22b-2507`); no curated list, no probing, no capability detection.
-Audit and repair rules are tuned for Qwen and may be wrong for other model
-families.
+- Preserve the original navy/gradient/card/pill interface and two-column layout.
+- Leave `/Users/lisa/src/h3-prompt-tool` untouched.
+- Analyze the exact trimmed artifact that can be downloaded.
+- Generate a prompt accompanying that clip (`<Video 1>`), for manual H3 or ComfyUI use.
+- Never upload to or enqueue on H3/ComfyUI automatically.
+- Preserve settings, Keychain credentials and the pre-existing Sharp upgrade.
 
-## Provider Model
+## Implemented subsystems
 
-- **LM Studio** — user runs their own server, enters the Qwen model ID. App
-  sends requests to `http://127.0.0.1:1234/v1/chat/completions` using the Qwen
-  chat template. No probing, no capability detection.
-- **OpenRouter** — user enters their API key (stored in macOS Keychain via
-  `security` command) and Qwen model ID. App sends requests to
-  `https://openrouter.ai/api/v1/chat/completions`.
+- Shared H3, Video → Prompt and Krea UI, model settings and project controls.
+- Accurate 2–15 second MP4 preparation, frame analysis, optional resampling, reviewed descriptions and reference-role adaptation.
+- Matching clip/text/Markdown downloads with outdated-result guards.
+- Versioned project persistence with atomic save and media restoration.
+- Controlled-provider unit/integration/browser tests and real FFmpeg fixture checks.
 
-Provider is explicit per request. Never fall back automatically.
+## Validation boundary
 
-## Core Features
+Automated model responses validate application behavior, not live VLM accuracy. Actual prompt quality depends on the selected vision model and should be reviewed against the clip. ComfyUI compatibility is manual and workflow-specific; no ComfyUI service is contacted by the application or tests.
 
-- Five MiniMax H3 modes: T2VA, I2VA, FL2VA, L2VA, Reference
-- Image references, video references (contact sheets via FFmpeg), audio
-  references (uploaded, stored, declared as `<Audio N>`)
-- Creative brief, aspect ratio, duration controls
-- Vendored MiniMax official guides
-- Prompt assembly, generation, refinement, cancellation via SSE + AbortController
-- Post-generation prompt audit (Qwen-aware: check for chat-template artifacts,
-  leaked special tokens, missing/declared reference tags, mode-specific shape)
-  and optional narrow repair (mechanical fixes only — strip, insert, truncate;
-  never rephrase)
-- Advanced settings: system prompt override, context profile, thinking toggle, seed
+## Next phase: continuity between generated clips
 
-## What We Drop from the Upstream
+### Confirmed direction — 2026-08-30
 
-- All VRAM/memory estimation and GPU management
-- Gemma-specific token-count heuristics and control-token stripping in
-  `final_text()` (replaced by Qwen-aware audit/repair)
-- Model discovery and setup catalog
-- `llama-cpp-python` / PyAV / PyTorch dependencies
-- Browser/Playwright test suite
+The objective is to make separately generated clips and camera angles connect more naturally when edited together after ComfyUI generation.
 
-## Stack
+There are two required outcomes:
 
-- Node.js 22, ES modules, Express
-- Vanilla JS browser UI (port from upstream web/), no build tool
-- Sharp for image normalization
-- `ffmpeg` on PATH (user-installed; documented prereq) for video frame
-  extraction and contact sheets — not packaged
-- macOS Keychain for the OpenRouter key
-- JSON settings file for non-secret preferences
-- Ephemeral session media in an OS temp dir; wiped (or abandoned) on app
-  restart. No persistence, no cleanup logic. If the app crashes, the user
-  starts fresh.
+1. Develop an editable story from an idea or supplied script, then generate image prompts for its storyboard.
+2. Generate coordinated H3 clip prompts that explicitly use a character sheet, storyboard images, or both as assigned references.
 
-## API Endpoints (under `/h3studio`)
+**User-confirmed workflow:** Story → storyboard prompts → generate/import images → **Human Control — review and assign references** → coordinated H3 clip prompts → manual ComfyUI generation.
 
-| Method | Route | Purpose |
-|--------|-------|---------|
-| GET | `/h3studio/status` | App state |
-| GET | `/h3studio/guides` | List guides |
-| GET | `/h3studio/guides/:mode` | Guide for mode |
-| POST | `/h3studio/assemble` | Preview prompt assembly |
-| POST | `/h3studio/generate` | Generate — SSE streaming |
-| POST | `/h3studio/cancel` | Cancel via AbortController |
-| POST | `/h3studio/refine` | Text-only refinement |
-| POST | `/h3studio/media/upload` | Upload image/video/audio |
-| GET | `/h3studio/media` | List session media |
-| GET | `/h3studio/media/manifest` | Validated manifest for mode |
-| GET | `/h3studio/media/:id/content` | Serve original/preview/sheet/frame |
-| DELETE | `/h3studio/media/:id` | Remove asset |
-| DELETE | `/h3studio/media` | Clear session |
-| POST | `/h3studio/media/reorder` | Reorder assets |
-| GET/PUT | `/h3studio/settings` | Non-secret prefs (redacted) |
-| POST | `/h3studio/settings/openrouter-key` | Set/replace key |
-| DELETE | `/h3studio/settings/openrouter-key` | Delete key |
+Human Control is an explicit approval step, not an automatic model decision. After importing images, the user reviews/replaces them, confirms the scene/clip order, selects panels or crops, and assigns each reference to a character, clip and role. Model suggestions remain unapproved until accepted. Coordinated H3 prompt generation requires this approval. Subsequent changes to the approved story, clip order, images, crops or reference assignments require renewed review of the affected plan and mark dependent prompts as outdated.
 
-Structured errors with stable codes (invalid media, provider unavailable,
-auth failure, context overflow, busy, cancelled).
+- No Claude Code integration, runtime, installation, or dependency.
+- Use the existing LM Studio connection and user-selected local model. OpenRouter remains an explicitly selected alternative; never switch to cloud automatically.
+- Adapt useful storyboard guidance into app-owned instructions and editable data. Do not install or execute the upstream skill. Retain attribution/license for any adapted material.
+- Keep the existing graphical style and manual prompt/reference export. No automatic ComfyUI calls or generation queue.
 
-## Testing
+### Implemented first workflow — 2026-08-30
 
-Manual human testing. Unit tests only for the critical ported logic:
+1. **Develop the story.** Accept an idea or existing story/script. The selected LLM proposes an editable story, characters, scenes and action sequence. The user reviews/edits it before requesting image prompts; formal Human Control approval comes after importing images and assigning references, before H3 clip generation. Preserve supplied dialogue verbatim.
+2. **Establish shared scene details.** Save character identities, wardrobe, setting, lighting, props, aspect ratio, and spatial relationships. Keep these stable across image and clip prompts unless the user requests a change.
+3. **Plan editable clips and angles.** Each card represents one exported H3 generation prompt, with duration, camera position/framing, visible subjects, action, dialogue, and start/end state. Prefer one camera angle per clip initially. A shot inside a clip is not automatically another generated clip.
+4. **Write storyboard image prompts.** Produce a prompt for each planned panel/scene, with an optional combined storyboard-sheet prompt that specifies panel order and layout. Each panel depicts a selected still moment, not an entire action sequence. Repeat the approved identity and scene details where needed so exported prompts are independently usable. Keep these image prompts separate from H3 motion/dialogue prompts. The user generates the images in their chosen image workflow and uploads the results; this step does not automatically send work to ComfyUI or an image service.
+5. **Human Control — review and assign references.** Show the imported images alongside the planned clips for explicit human review. The user chooses which images to keep, replaces unsuitable results, confirms clip order, and approves the assignments before H3 prompt generation. Allow a multi-angle character sheet, individual character views, a complete storyboard sheet, or separate storyboard panels. Link each character reference to its subject; link each storyboard panel to its scene/clip. Offer explicit panel selection/cropping with an exportable image, rather than relying on ambiguous instructions about a panel embedded in a grid. A vision model may propose mappings, but cannot approve them. Support character-sheet-only, storyboard-only, and combined use.
+6. **Review each connection.** Mark whether it is a continuation, a cut to another angle, or an intentional scene/time change. For a continuation, compare endpoint pose, position and action phase. For an angle cut, compare scene geometry, camera side, eyelines, screen direction and action continuity; do not demand identical images from different viewpoints. Make suggestions editable and preserve intentional exceptions.
+7. **Generate coordinated H3 prompts.** Build each prompt from the approved story/common scene, its clip card, assigned images and its neighboring connections. Use the existing H3 mode-specific formatting/audit. Keep reference labels local to each export and attach a reference mapping. Distinguish appearance references from composition/pose references and first/last-frame constraints. Do not add dialogue, new cuts or reference-derived facts without approval.
+8. **Export manually.** Copy/download numbered storyboard-image prompts, H3 clip prompts, the shot list, selected reference images/crops, reference mapping, and editing notes. The user imports prompts and references into their existing ComfyUI workflow.
+9. **Review actual renders (later increment).** Let the user upload generated clips to compare neighboring endpoints and select useful frames. A vision-capable model can flag visible mismatches for review. Offer endpoint-image export for a suitable continuation workflow; an angle change may need a different view rather than reuse of the exact previous frame. Changes to later prompts require approval and create revisions.
 
-- Request assembly (all five modes)
-- Validation limits
-- Prompt audit and repair decisions
+### Reference semantics
 
-No browser automation, no contract tests, no integration test suite.
+- **Character sheet:** identity, appearance, clothing and applicable view. Multiple views depict the same subject, not multiple people in the generated scene. Do not copy the sheet's grid, labels or neutral background into the target scene unless explicitly requested.
+- **Storyboard panel:** scene composition, camera angle, blocking and selected pose/action moment. A still image alone does not establish unseen motion or exact temporal progression; the approved story and clip card supply those.
+- **Combined:** make the assignment explicit, for example a character reference supplies appearance while the linked storyboard panel supplies framing and blocking. If they disagree, show the conflict and let the user choose which traits to retain.
+- **Start/end frame:** a separate intentional role supported by the chosen H3 mode, never inferred merely because an image is called a storyboard panel. A complete collage must not accidentally become the first frame of a full-screen video.
+- Save original sheets, selected panel crops and their mappings with the project. Editing story, clip order or reference assignments marks dependent prompts as outdated without discarding prior revisions.
 
-## v1 Out of Scope
+### Scope and safeguards
 
-- No database, user accounts, Electron, packaging
-- No direct GGUF bindings or native audio analysis
-- No automatic fallback between providers
-- No Windows support (portable architecture)
+The first implementation is in `public/storyboard.js`, shared `public/storyboard-state.js`, `src/lib/storyboard.js`, and `src/storyboard_routes.js`. Server-held approvals are bound to a canonical plan/media fingerprint and session; model responses cannot supply approved references or approval tokens. Saved projects preserve drafts, references, crops and prompt history but require renewed human approval when reopened. The returned-render feedback step remains a later increment.
+
+- First implementation includes both goals: story development, storyboard image prompts, character-sheet/storyboard reference assignment and panel crops, scene continuity fields, clip cards, connection review, coordinated H3 prompts, project save/restore and manual export.
+- Next increment: user-uploaded render comparison, chosen endpoint frames and targeted prompt revisions. No automatic stitching or full video editor.
+- Keep observed video descriptions separate from creative plans. A proposed cut must never silently change the existing prepared clip or claim it occurred in the source.
+- Separate concrete checks (missing references, invalid timing) from model suggestions (action density, composition, performance). Upstream experimental thresholds are not mandatory format rules.
+- Preserve existing H3, Video and Krea behavior, local-first privacy, cancellation, revision history and outdated-result guards.
+- The existing Krea reference mode is deliberately style-only. Storyboard identity/composition references need an explicit new path with their own instructions; do not silently reinterpret existing Krea references as character identity.
+- Tests should cover both story-to-image-prompt and reference-to-H3-prompt flows, required human approval and its invalidation after changes, sheet/panel mappings, single-subject identity across views, reference remapping, persisted crops, outdated-result handling, rejected automatic cloud fallback, and continuity state flowing into neighboring prompts. Actual visual improvement must be assessed using user-provided ComfyUI outputs; prompt checks alone cannot prove it.

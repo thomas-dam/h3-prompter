@@ -2,6 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { auditPrompt } from "../src/lib/prompt_audit.js";
 
+test("cut timing audit checks order, numbering and the untimed first shot", () => {
+  const append = (text) => referencePrompt(340).replace("overall_soundscape:", `${text}\n\noverall_soundscape:`);
+  const good = append("[Shot 2] At 00:02.000, the camera cuts to another view.\n[Shot 3] At 00:03.000, a hard cut reveals the room.");
+  assert.deepEqual(auditPrompt(good, "Reference", 4).shot_timing_violations, []);
+  for (const bad of [good.replace("00:03.000", "00:01.000"), good.replace("[Shot 3]", "[Shot 2]"), good.replace("00:03.000", "00:04.000"), good.replace("[Shot 1]", "[Shot 1] At 00:00.000,")]) {
+    assert.equal(auditPrompt(bad, "Reference", 4).repair_required, true);
+  }
+});
+
 function referencePrompt(wordCount, { includeSoundscape = true } = {}) {
   const detailed = "visible ".repeat(wordCount).trim();
   const soundscape = includeSoundscape ? "overall_soundscape:\nN/A\n\n" : "";

@@ -10,11 +10,13 @@ import {
 } from "../lib/prompt_repair.js";
 import { buildChatMessages, streamChatCompletion } from "../providers/llm.js";
 import { STANDARD_OUTPUT_TOKENS } from "../lib/context.js";
+import { localBaseUrl } from "./settings.js";
+import { motionBindingViolations } from './reference_roles.js';
 
 export function providerUrlAndHeaders(provider, settings, modelId) {
   if (provider === "lmstudio") {
     return {
-      url: "http://127.0.0.1:1234/v1/chat/completions",
+      url: `${localBaseUrl(settings)}/chat/completions`,
       headers: {},
       model: modelId,
     };
@@ -37,6 +39,7 @@ export async function generate({
   settings,
   runtimePlan,
   thinking,
+  temperature = 1.0,
   seed,
   sessionStore,
   signal,
@@ -45,11 +48,14 @@ export async function generate({
 }) {
   const { url, headers, model } = providerUrlAndHeaders(provider, settings, modelId);
   const { messages, metrics } = buildChatMessages(assembled, sessionStore);
+  const originalRef2VA = assembled.input.workflow === 'original_ref2va';
 
-  const payload = {
+  const payload = originalRef2VA ? {
+    model, messages, temperature: 0.4, max_tokens: 4000, stream: false,
+  } : {
     model,
     messages,
-    temperature: 1.0,
+    temperature,
     top_p: 0.95,
     top_k: 64,
     max_tokens: runtimePlan.max_output_tokens,
@@ -57,7 +63,7 @@ export async function generate({
     stream_options: { include_usage: true },
     chat_template_kwargs: { enable_thinking: thinking },
   };
-  if (seed !== undefined && seed !== null) payload.seed = seed;
+  if (!originalRef2VA && seed !== undefined && seed !== null) payload.seed = seed;
 
   let response;
   try {
@@ -70,6 +76,26 @@ export async function generate({
       throw new ModelError("PROVIDER_UNAVAILABLE", "LM Studio is not reachable. Start its local server on port 1234 and try again.");
     }
     throw new ModelError("PROVIDER_ERROR", error.message.replace(/^[A-Z_]+: /, ""), { cause: error.cause });
+  }
+
+  // The recovered tool returns the one response directly. Do not run it through
+  // the later fallback, constraint enforcement or automatic rewriting pipeline.
+  if (originalRef2VA) {
+    const prompt = response.choices?.[0]?.message?.content?.trim() || '';
+    if (!prompt) throw new ModelError('EMPTY_GENERATION', 'The model returned no prompt.');
+    return {
+      prompt,
+      prompt_audit: null,
+      input_tokens: response.usage?.prompt_tokens || 0,
+      output_tokens: response.usage?.completion_tokens || 0,
+      primary_finish_reason: response.choices?.[0]?.finish_reason,
+      thinking: null,
+      thinking_fallback: false,
+      format_repair_attempted: false,
+      format_repair_applied: false,
+      workflow: 'original_ref2va',
+      ...metrics,
+    };
   }
 
   const usableFinalText = (candidate) => {
@@ -110,17 +136,19 @@ export async function generate({
     );
   }
   const durationSeconds = assembled.input.duration_seconds;
-  const intentText = assembled.input.creative_brief || [assembled.input.current_prompt, assembled.input.instruction].join("\n");
-  const cameraStructureAllowed = cameraStructureRequested(intentText);
+  // A revision may deliberately change an earlier restriction. Do not repair it
+  // back to the original brief; that brief still guides the model's other details.
+  const intentText = assembled.input.instruction || assembled.input.creative_brief || assembled.input.current_prompt || "";
+  const cameraStructureAllowed = cameraStructureRequested([assembled.input.creative_brief, intentText].filter(Boolean).join("\n"));
 
   let initialAudit = auditPrompt(prompt, assembled.input.mode, durationSeconds, cameraStructureAllowed);
-  const userContent = assembled.messages.find((m) => m.role === "user").content;
-  const expectedReferenceTags = referenceTags(userContent);
+  // H3 references can be declared without attaching their files to the prompt writer.
+  const expectedReferenceTags = new Set(assembled.input.reference_tags || referenceTags((assembled.input.media_manifest.assets || []).filter(a => a.type === 'audio' || a.analysis_requested !== false).map(a => a.reference || '').join('\n')));
   const actualReferenceTags = referenceTags(prompt);
   const missingReferenceTags = [...expectedReferenceTags].filter((t) => !actualReferenceTags.has(t)).sort();
   const unexpectedReferenceTags = [...actualReferenceTags].filter((t) => !expectedReferenceTags.has(t)).sort();
   const hasUnexpectedAudioTask = unexpectedAudioTask(initialAudit.task_label, expectedReferenceTags);
-  const constraintViolations = explicitConstraintViolations(intentText, prompt);
+  const constraintViolations = [...explicitConstraintViolations(intentText, prompt), ...motionBindingViolations(prompt, assembled.input.reference_roles)];
 
   if (assembled.input.mode === "Reference") {
     initialAudit.missing_reference_tags = missingReferenceTags;
@@ -176,7 +204,7 @@ export async function generate({
       repairedAudit.missing_reference_tags = [...expectedReferenceTags].filter((t) => !repairedTags.has(t)).sort();
       repairedAudit.unexpected_reference_tags = [...repairedTags].filter((t) => !expectedReferenceTags.has(t)).sort();
       repairedAudit.unexpected_audio_task = unexpectedAudioTask(repairedAudit.task_label, expectedReferenceTags);
-      repairedAudit.explicit_constraint_violations = explicitConstraintViolations(intentText, repaired);
+      repairedAudit.explicit_constraint_violations = [...explicitConstraintViolations(intentText, repaired), ...motionBindingViolations(repaired, assembled.input.reference_roles)];
       repairedAudit.repair_required = !!(
         repairedAudit.repair_required ||
         repairedAudit.missing_reference_tags.length ||
@@ -200,6 +228,12 @@ export async function generate({
       }
       usage.completion_tokens = parseInt(usage.completion_tokens || 0, 10) + formatRepairTokens;
     }
+  }
+
+  if (assembled.input.mode === 'Reference' && (initialAudit.missing_reference_tags?.length || initialAudit.unexpected_reference_tags?.length || initialAudit.unexpected_audio_task || initialAudit.explicit_constraint_violations?.length)) {
+    throw new ModelError('REFERENCE_GROUNDING_FAILED',
+      `The model did not preserve the requested references after correction: ${auditFailures(initialAudit).join('; ')}. The failed draft was not saved. Retry or choose another model.`,
+      { audit: initialAudit, repair_failure: formatRepairFailure });
   }
 
   return {
