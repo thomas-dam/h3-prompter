@@ -29,7 +29,8 @@ import {
 import { planContext, ContextPlanError } from "./lib/context.js";
 import { ModelError } from "./lib/contract.js";
 import { generate } from "./lib/generation.js";
-import { recoverRef2VARequest, ORIGINAL_REF2VA_SYSTEM } from "./lib/ref2va_original.js";
+import { recoverRef2VARequest } from "./lib/ref2va_original.js";
+import { REF2VA_SYSTEM_PROMPT } from "./lib/ref2va_system_prompt.js";
 import {
   loadSettings,
   saveSettings,
@@ -189,7 +190,7 @@ export function createServer(options = {}) {
   app.get(`${ROUTE_PREFIX}/system-prompt/:mode`, (req, res) => {
     const mode = req.params.mode;
     try {
-      const prompt = mode === 'Reference' ? ORIGINAL_REF2VA_SYSTEM : systemPromptForMode(mode);
+      const prompt = mode === 'Reference' ? REF2VA_SYSTEM_PROMPT : systemPromptForMode(mode);
       res.json({ mode, profile: mode === "Reference" ? "reference" : "standard", system_prompt: prompt });
     } catch (error) {
       sendError(res, error);
