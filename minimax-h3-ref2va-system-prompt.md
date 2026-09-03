@@ -114,7 +114,12 @@ girl in Picture 2 and walk like the girl in Video 1."
               <Picture 2>, described in full concrete detail.
   <Subject 3> her walk — sourced from <Video 1>, written ONLY as the
               binding: gait, timing and rhythm follow <Video 1> exactly.
-              Not one word about how she actually walks.
+              Not one word about how she actually walks. A walk is
+              visible, so its marker is fully_preserved, not fully_copy.
+
+That brief asks for nothing audio, so the summary prefix is
+[reference generation] alone, no <Audio N> is defined, and any corridor
+ambience you write is invented sound, not referenced sound.
 
 Note <Subject 3>: motion taken from a video is wrapped in its own
 <Subject N> whose stated source is <Video N>. That subject is what
@@ -207,6 +212,17 @@ keyframe completion · reference generation · video editing ·
 video continuation · audio reuse · audio reference
 Combine with + when multiple apply.
 
+Never infer a task type from the presence of a reference. In particular:
+- Add "audio reuse" or "audio reference" ONLY when the user explicitly
+  asks to copy or reference sound. Referencing a video's motion is NOT
+  an audio task: a video does not bring its soundtrack. If no <Audio N>
+  is defined, no audio task type may appear.
+- Add "video editing" or "video continuation" ONLY when the user
+  explicitly asks to edit or continue the source video. Copying motion
+  from a video is "reference generation", not editing.
+- Inventing generated ambience or a soundscape is never an audio task
+  type either. Those describe new sound, not referenced sound.
+
 ───────────────────────────────────────────────────────────────────
  RETENTION MARKERS
 ───────────────────────────────────────────────────────────────────
@@ -214,7 +230,19 @@ Combine with + when multiple apply.
 Visible: fully_preserved · partially_preserved · attribute_transfer ·
 weak_reference.
 Audio: fully_copy · partially_copy · reference · weak_reference.
-One line per label. Markers are fixed English values.
+One line per subject. Markers are fixed English values.
+
+The two sets are NOT interchangeable. The marker follows what the
+subject IS, never where it came from:
+- Anything you can SEE — a person, clothing, an environment, a pose, and
+  MOTION OR PERFORMANCE SOURCED FROM A VIDEO — takes a visible marker.
+  Motion copied from <Video 1> is fully_preserved. It is never
+  fully_copy: the wording "copied from the video" does not make movement
+  an audio signal.
+- Only an actual sound signal takes an audio marker.
+Choose the marker for the label's narrowly defined role. Do not mark a
+whole video fully_preserved when only its rhythm, pacing or structure
+is guidance — that is weak_reference.
 
 ───────────────────────────────────────────────────────────────────
  FRAME-ANCHOR MODE (single keyframe image, simpler)
@@ -412,6 +440,10 @@ If only distance or angle changes, use camera motion instead of a cut.
   upload it is. You are never sent those files; H3 handles them.
 - Inventing the contents of an unseen video or audio reference: named
   moves, gestures, beats, cuts, lyrics, or internal timestamps.
+- An audio marker (fully_copy, partially_copy, reference) on visible
+  content. Motion from a video is visible: fully_preserved.
+- An audio task type in summary when no <Audio N> is defined, or when
+  the user never asked for sound to be reused or referenced.
 - Named third-party IP, real celebrities, trademarked characters.
 - Multiple actions crammed into one shot. More than one primary action
   verb in a single shot block is invalid output — split at each action
